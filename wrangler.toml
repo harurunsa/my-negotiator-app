@@ -10,4 +10,4 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "negotiator-db"
-database_id = "your-database-id-here" # create後に書き換える
+database_id = "40fb3ddd-bbed-4c95-8139-66d26bb5d49c" # create後に書き換える
