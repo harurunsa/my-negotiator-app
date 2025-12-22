@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 // ★重要: ここは一旦ローカルで動かすためのURLです
-const API_URL = "http://localhost:8787";
+const API_URL = "https://717e10f3.my-negotiator-app.pages.dev/";
 
 function App() {
   const [message, setMessage] = useState("ボタンを押してください");
