@@ -1,0 +1,16 @@
+name = "negotiator-backend"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "negotiator-db"
+database_id = "40fb3ddd-bbed-4c95-8139-66d26bb5d49c"
+
+[ai]
+binding = "AI"
+
+[vars]
+GOOGLE_CLIENT_ID = "your-google-client-id.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET = "your-google-client-secret"
+FRONTEND_URL = "http://localhost:5173"
