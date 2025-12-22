@@ -1,0 +1,20 @@
+{
+  "name": "negotiator-monorepo",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build",
+    "dev": "cd frontend && npm run dev"
+  }
+}
+```
+
+そして、Cloudflare Pagesの設定を：
+- **ビルドコマンド**: `npm run build`
+- **ビルド出力ディレクトリ**: `frontend/dist`
+- **ルートディレクトリ**: `/` (空欄でOK)
+
+### 3. 環境変数の設定
+
+Cloudflare Pages のダッシュボードで、以下の環境変数を設定：
+```
+VITE_BACKEND_URL=https://your-worker-name.workers.dev
