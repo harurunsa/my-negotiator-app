@@ -11,4 +11,4 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "negotiator-db"
-database_id = "MESSAGE_ID_GOES_HERE"
+database_id = "40fb3ddd-bbed-4c95-8139-66d26bb5d49c"
