@@ -1,0 +1,14 @@
+name = "negotiator-backend"
+main = "src/index.ts"
+compatibility_date = "2024-12-22"
+
+# AI機能 (Llama-3) を有効化
+[ai]
+binding = "AI"
+
+# データベース (D1) の設定
+# ※ idは後でコマンドで生成して書き換えます
+[[d1_databases]]
+binding = "DB"
+database_name = "negotiator-db"
+database_id = "MESSAGE_ID_GOES_HERE"
