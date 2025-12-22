@@ -1,4 +1,4 @@
-name = "negotiator-backend"
+name = "my-negotiator-app"
 main = "backend/src/index.ts"
 compatibility_date = "2024-12-20"
 
