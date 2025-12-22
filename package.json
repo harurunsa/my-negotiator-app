@@ -1,5 +1,5 @@
 {
-  "name": "negotiator-root",
+  "name": "my-negotiator-app",
   "private": true,
   "workspaces": [
     "frontend",
