@@ -1,1 +1,13 @@
-
+{
+  "name": "my-negotiator-app",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=frontend",
+    "deploy:backend": "npm run deploy --workspace=backend"
+  }
+}
