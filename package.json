@@ -1,9 +1,12 @@
 {
-  "name": "negotiator-monorepo",
-  "version": "1.0.0",
+  "name": "negotiator-root",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "scripts": {
-    "build": "cd frontend && npm install && npm run build",
-    "dev": "cd frontend && npm run dev"
+    "dev": "npm run dev --workspace=frontend",
+    "deploy:backend": "npm run deploy --workspace=backend"
   }
 }
-
