@@ -1,17 +1,13 @@
 {
   "name": "negotiator-backend",
-  "version": "1.0.0",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "db:init": "wrangler d1 execute negotiator-db --local --file=./schema.sql",
-    "db:init:remote": "wrangler d1 execute negotiator-db --remote --file=./schema.sql"
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "hono": "^4.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241127.0",
-    "wrangler": "^3.94.0"
+    "wrangler": "^3.0.0"
   }
 }
