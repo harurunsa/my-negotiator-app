@@ -11,7 +11,7 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
-// --- 認証周り (前回と同じなので省略可ですが、コピペ用に残します) ---
+// --- 認証周り (変更なし) ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -37,7 +37,6 @@ app.get('/auth/callback', async (c) => {
     })
     const userData: any = await userResponse.json()
 
-    // 初期スタイル設定
     await c.env.DB.prepare(
       `INSERT INTO users (id, email, name, created_at, current_best_style) 
        VALUES (?, ?, ?, ?, 'タスクを極限まで小さく分解し、優しく励ますパートナー')
@@ -52,60 +51,51 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- ★進化したAIチャットロジック ---
+// --- ★修正: 文脈維持機能付きチャット ---
 app.post('/api/chat', async (c) => {
   try {
-    const { message, email, action, prev_context } = await c.req.json() // action: 'normal' | 'retry' | 'next'
+    // ★ current_goal を受け取るように追加
+    const { message, email, action, prev_context, current_goal } = await c.req.json() 
     const apiKey = c.env.GEMINI_API_KEY
     
-    // 1. ユーザー情報取得
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     let stylePrompt = user.current_best_style || "優しく励ます";
     const userMemory = user.memory || "特になし";
 
-    // 2. アクションに応じたプロンプト調整 (コンテキストバンディット的対応)
     let contextInstruction = "";
-    let isExploration = false; // 今回実験するかどうか
+    let isExploration = false;
 
     if (action === 'retry') {
-      // ★リカバリー: 却下された場合
-      // 変異はさせず、確実に「もっと小さく」する安全策をとる
       contextInstruction = `
-        【重要状況: ユーザー拒絶】
-        直前のあなたの提案は「難しすぎる」か「気に食わない」と却下されました。
-        直前の提案: "${prev_context}"
-        
+        【状況: ユーザー拒絶】
+        直前の提案「${prev_context}」は却下されました。
         指示:
-        1. まず短く謝ってください。
-        2. タスクの粒度を「さらに半分以下」に小さくしてください。（例: PCを開く→PCの前に座る）
-        3. スタイルは維持しますが、少し低姿勢にしてください。
+        1. 謝罪し、タスクの粒度をさらに半分以下にしてください。
+        2. 目標「${current_goal || '今のタスク'}」を諦めさせないでください。
       `;
     } else if (action === 'next') {
-      // ★コンボ: 成功した場合
-      // ユーザーはノッているので、探索(変異)を入れても良いタイミング
+      // ★ここを修正！目標に関連するタスクのみを出させる
       isExploration = Math.random() < 0.2; 
       contextInstruction = `
-        【重要状況: コンボ継続中！】
-        ユーザーは直前のタスクを完了しました！ドーパミンが出ています！
+        【状況: コンボ継続中！】
+        ユーザーは直前のステップを完了しました。
+        
+        ★最重要: ユーザーの現在の最終目標は【 ${current_goal} 】です。
         
         指示:
-        1. 「ナイス！」「その調子！」と短く褒めてください。
-        2. 間髪入れずに「次のマイクロステップ」を提示してください。
-        3. 勢いを止めないでください。
+        1. 「ナイス！」と短く褒めてください。
+        2. 目標【 ${current_goal} 】を達成するための、論理的な「次のマイクロステップ」を提示してください。
+        3. 決して関係ない話題（デスクワークなど）に飛ばないでください。文脈を維持してください。
       `;
     } else {
-      // 通常会話
       isExploration = Math.random() < 0.2;
     }
 
-    // 3. スタイルの突然変異 (探索)
+    // 探索（変異）ロジック
     let usedStyle = stylePrompt;
     if (isExploration && action !== 'retry') {
       const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
-      const mutationPrompt = `
-        現在の接客スタイル: "${stylePrompt}"
-        指示: このスタイルを少しだけ変更（厳しく/優しく/短く/絵文字多め 等）して、バリエーションを作ってください。出力は説明文のみ。
-      `;
+      const mutationPrompt = `現在の接客スタイル: "${stylePrompt}"。指示: このスタイルを少しだけ変更（厳しく/優しく/短く/絵文字多め 等）して、バリエーションを作ってください。出力は説明文のみ。`;
       try {
         const mRes = await fetch(mutationUrl, {
           method: 'POST',
@@ -118,27 +108,28 @@ app.post('/api/chat', async (c) => {
       } catch (e) {}
     }
 
-    // 4. Geminiリクエスト生成
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
     
     const systemInstruction = `
       あなたはADHDサポートAIです。
-      【現在のスタイル設定】: "${usedStyle}"
+      【現在のスタイル】: "${usedStyle}"
       【ユーザーの記憶】: ${userMemory}
-      
       ${contextInstruction}
       
       【出力ルール】JSONのみ
       {
-        "reply": "ユーザーへの言葉",
-        "timer_seconds": 推奨タイマー秒数(整数。タスクが小さいなら180、大きいなら300など。最大600),
+        "reply": "言葉",
+        "timer_seconds": 推奨タイマー秒数(整数),
         "score": 0〜100,
         "is_combo": boolean,
         "reason": "理由"
       }
     `;
 
-    const requestText = action === 'normal' ? `User Input: ${message}` : `(System Trigger: ${action})`;
+    // 通常会話なら入力を、アクションならトリガーを送る
+    const requestText = action === 'normal' 
+      ? `User Input: ${message}` 
+      : `(System Trigger: ${action} - Current Goal: ${current_goal})`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -156,11 +147,8 @@ app.post('/api/chat', async (c) => {
     result.used_style = usedStyle;
     result.is_exploration = isExploration;
 
-    // 5. 記憶更新 (通常会話のみ)
     if (action === 'normal') {
-      c.executionCtx.waitUntil((async () => {
-         // (記憶更新ロジックは省略)
-      })());
+      c.executionCtx.waitUntil((async () => { /* 記憶更新処理(省略) */ })());
     }
 
     return c.json(result);
@@ -170,14 +158,12 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// --- フィードバック ---
+// --- フィードバック (変更なし) ---
 app.post('/api/feedback', async (c) => {
   const { email, used_style, is_success } = await c.req.json();
   try {
     if (is_success) {
-      // 成功時のみスタイルを上書き保存 (強化学習)
-      await c.env.DB.prepare("UPDATE users SET current_best_style = ?, streak = streak + 1 WHERE email = ?")
-        .bind(used_style, email).run();
+      await c.env.DB.prepare("UPDATE users SET current_best_style = ?, streak = streak + 1 WHERE email = ?").bind(used_style, email).run();
     }
     const user: any = await c.env.DB.prepare("SELECT streak FROM users WHERE email = ?").bind(email).first();
     return c.json({ streak: user.streak });
