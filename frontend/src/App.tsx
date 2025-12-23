@@ -8,13 +8,13 @@ function App() {
   const [chatLog, setChatLog] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   
-  // ★今の目標を覚えておくためのState
-  const [currentGoal, setCurrentGoal] = useState("");
+  // ★ゴールの維持
+  const [currentGoal, setCurrentGoal] = useState<string>("");
 
-  // タイマー関連
+  // ★タイマー関連
   const [timerActive, setTimerActive] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
-  const [totalTime, setTotalTime] = useState(0); // 割合計算用
+  const [totalTime, setTotalTime] = useState(0); // 円グラフ計算用
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -41,7 +41,6 @@ function App() {
   const handleTimerComplete = () => {
     setTimerActive(false);
     playNotificationSound();
-    // タイマー完了＝コンボ継続なので、ゴールを維持して次へ
     sendMessage(null, 'next');
   };
 
@@ -50,18 +49,13 @@ function App() {
   const sendMessage = async (manualMessage: string | null, action: 'normal' | 'retry' | 'next' = 'normal') => {
     if (action === 'normal' && !manualMessage?.trim()) return;
     
-    // ★ここが重要: 通常会話なら、それが「今回の目標」になるので保存する
-    if (action === 'normal' && manualMessage) {
-      setCurrentGoal(manualMessage); 
-    }
-
     let newLog = [...chatLog];
     if (action === 'normal' && manualMessage) {
       newLog.push({ role: "user", text: manualMessage });
     } else if (action === 'retry') {
-      newLog.push({ role: "system", text: "😰 難しすぎます..." });
+      newLog.push({ role: "system", text: "😰 再調整中..." });
     } else if (action === 'next') {
-      newLog.push({ role: "system", text: "✅ 完了！次のステップへ" });
+      newLog.push({ role: "system", text: "✅ 次のステップへ！" });
     }
     
     setChatLog(newLog);
@@ -79,10 +73,15 @@ function App() {
           email: user?.email, 
           action, 
           prev_context: lastAiMsg,
-          current_goal: currentGoal // ★AIに目標を思い出させる
+          current_goal: currentGoal // ★現在の大目標をバックエンドに伝える
         }),
       });
       const data = await res.json();
+
+      // AIがゴールを検出したら更新
+      if (data.detected_goal) {
+        setCurrentGoal(data.detected_goal);
+      }
 
       setChatLog(prev => [...prev, { 
         role: "ai", 
@@ -114,8 +113,9 @@ function App() {
     });
 
     if (is_success) {
+      // タイマー開始
       const t = suggestedTimer || 180;
-      setTotalTime(t); // 全体時間をセット
+      setTotalTime(t);
       setTimeLeft(t);
       setTimerActive(true);
     } else {
@@ -138,83 +138,87 @@ function App() {
     } catch(e) {}
   };
 
-  // ★円形タイマーコンポーネント (SVG)
-  const CircleTimer = () => {
-    const radius = 60; // 半径を大きく
-    const stroke = 12;
-    const normalizedRadius = radius - stroke * 2;
-    const circumference = normalizedRadius * 2 * Math.PI;
-    const strokeDashoffset = circumference - (timeLeft / totalTime) * circumference;
-    
-    // 残り時間に応じた色変化
-    const percentage = timeLeft / totalTime;
-    let color = '#00e676'; // 緑
-    if (percentage < 0.5) color = '#ffeb3b'; // 黄
-    if (percentage < 0.2) color = '#ff1744'; // 赤
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
 
-    return (
-      <div style={{
-        position: 'fixed', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
-        background: 'rgba(30,30,30,0.95)', padding: '20px', borderRadius: '50%',
-        boxShadow: '0 10px 30px rgba(0,0,0,0.4)', zIndex: 100,
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        width: '180px', height: '180px' // 全体サイズ
-      }}>
-        <div style={{position: 'relative', width: radius * 2.5, height: radius * 2.5}}>
-          <svg height={radius * 2.5} width={radius * 2.5} style={{transform: 'rotate(-90deg)'}}>
-            <circle
-              stroke="#444"
-              strokeWidth={stroke}
-              r={normalizedRadius}
-              cx={radius * 1.25}
-              cy={radius * 1.25}
-              fill="transparent"
-            />
-            <circle
-              stroke={color}
-              strokeWidth={stroke}
-              strokeDasharray={circumference + ' ' + circumference}
-              style={{ strokeDashoffset, transition: 'stroke-dashoffset 1s linear, stroke 1s linear' }}
-              strokeLinecap="round"
-              r={normalizedRadius}
-              cx={radius * 1.25}
-              cy={radius * 1.25}
-              fill="transparent"
-            />
-          </svg>
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            textAlign: 'center', color: '#fff'
-          }}>
-            <div style={{fontSize: '2rem', fontWeight: 'bold', fontFamily: 'monospace'}}>
-              {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
-            </div>
-            <div style={{fontSize: '0.8rem', color: '#aaa', marginTop: '5px'}}>FOCUS</div>
-          </div>
-        </div>
-        
-        {/* キャンセルボタンを下に配置 */}
-        <button onClick={handleTimerComplete} style={{
-          marginTop: '10px', background: 'transparent', border: '1px solid #666', 
-          color: '#aaa', padding: '5px 15px', borderRadius: '15px', cursor: 'pointer', fontSize: '0.8rem'
-        }}>
-          完了にする
-        </button>
-      </div>
-    );
+  // ★円グラフの計算
+  // 半径80px, 全周 2*PI*80 ≒ 502
+  const RADIUS = 80;
+  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+  const strokeDashoffset = CIRCUMFERENCE - (timeLeft / totalTime) * CIRCUMFERENCE;
+  
+  // 残り時間に応じた色
+  const getProgressColor = () => {
+    const ratio = timeLeft / totalTime;
+    if (ratio > 0.5) return "#00e676"; // 緑
+    if (ratio > 0.2) return "#ffeb3b"; // 黄
+    return "#ff1744"; // 赤
   };
 
   return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '0 auto', padding: '20px', paddingBottom: '220px' }}>
+    <div style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '0 auto', padding: '20px', paddingBottom: '100px' }}>
       
-      {/* タイマー表示 */}
-      {timerActive && <CircleTimer />}
+      {/* --- ★新タイマーUI (オーバーレイ) --- */}
+      {timerActive && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+          background: 'rgba(0,0,0,0.85)', zIndex: 999,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{ position: 'relative', width: '250px', height: '250px' }}>
+            {/* 背景円 */}
+            <svg width="250" height="250" style={{ transform: 'rotate(-90deg)' }}>
+              <circle
+                cx="125" cy="125" r={RADIUS}
+                fill="transparent"
+                stroke="#333"
+                strokeWidth="15"
+              />
+              {/* 進捗円 */}
+              <circle
+                cx="125" cy="125" r={RADIUS}
+                fill="transparent"
+                stroke={getProgressColor()}
+                strokeWidth="15"
+                strokeDasharray={CIRCUMFERENCE}
+                strokeDashoffset={strokeDashoffset}
+                strokeLinecap="round"
+                style={{ transition: 'stroke-dashoffset 1s linear, stroke 1s ease' }}
+              />
+            </svg>
+            
+            {/* 中央のテキスト */}
+            <div style={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              textAlign: 'center', color: 'white'
+            }}>
+              <div style={{ fontSize: '3rem', fontWeight: 'bold', fontFamily: 'monospace' }}>
+                {formatTime(timeLeft)}
+              </div>
+              <div style={{ fontSize: '0.9rem', opacity: 0.7, marginTop: '5px' }}>
+                {currentGoal ? `Goal: ${currentGoal}` : "FOCUS"}
+              </div>
+            </div>
+          </div>
+
+          <button onClick={handleTimerComplete} style={{
+            marginTop: '30px', background: 'transparent', border: '2px solid #fff', color: '#fff',
+            padding: '10px 30px', borderRadius: '30px', fontSize: '1.2rem', cursor: 'pointer'
+          }}>
+            完了！
+          </button>
+        </div>
+      )}
 
       {/* ヘッダー */}
       <header style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#333', color: 'white', padding: '15px', borderRadius: '12px' }}>
         <div>
-          <h1 style={{fontSize: '1.2rem', margin: 0}}>Negotiator AI 🧠</h1>
-          {currentGoal && <div style={{fontSize: '0.8rem', color: '#4fc3f7', marginTop: '5px'}}>Goal: {currentGoal}</div>}
+          <h1 style={{fontSize: '1.2rem', margin: 0}}>Combo AI ⚡</h1>
+          {/* ゴール表示 */}
+          {currentGoal && <div style={{fontSize: '0.8rem', color: '#4fc3f7', marginTop: '4px'}}>Now: {currentGoal}</div>}
         </div>
         {user && (
            <div style={{textAlign: 'right'}}>
@@ -252,20 +256,19 @@ function App() {
                     boxShadow: '0 2px 5px rgba(0,0,0,0.05)'
                   }}>
                     {log.text}
-
                     {log.role === 'ai' && !log.feedback_done && !timerActive && (
                       <div style={{marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #eee', display: 'flex', gap: '8px', justifyContent: 'flex-end'}}>
                         <button 
                           onClick={() => handleFeedback(i, log.used_style, true, log.timer_seconds)} 
                           style={{...miniBtnStyle, background: '#28a745', padding: '8px 16px', fontSize: '14px'}}
                         >
-                          👍 やる (Start)
+                          👍 やる (Timer)
                         </button>
                         <button 
                           onClick={() => handleFeedback(i, log.used_style, false, 0)} 
                           style={{...miniBtnStyle, background: '#6c757d'}}
                         >
-                          🤔 無理...
+                          🤔 無理
                         </button>
                       </div>
                     )}
@@ -276,13 +279,12 @@ function App() {
              {loading && <p style={{fontSize: '12px', color: '#888', textAlign: 'center'}}>Thinking...</p>}
           </div>
 
-          {/* 入力エリア */}
           <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
             <input 
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && sendMessage(input, 'normal')}
-              placeholder="新しいタスクを始める..."
+              placeholder="メッセージ..."
               disabled={timerActive}
               style={{ flex: 1, padding: '15px', border: '1px solid #ddd', borderRadius: '30px', fontSize: '16px' }}
             />
