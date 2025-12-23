@@ -1,28 +1,55 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
-// ★重要: ここは一旦ローカルで動かすためのURLです
+// あなたのWorkersのURL (末尾のスラッシュなし)
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
 function App() {
-  const [message, setMessage] = useState("ボタンを押してください");
+  const [user, setUser] = useState<{email: string, name: string} | null>(null);
 
-  const handleClick = async () => {
-    try {
-      const res = await fetch(API_URL);
-      const data = await res.json();
-      setMessage(data.message);
-    } catch (e) {
-      setMessage("エラー：バックエンドが起動していません");
+  useEffect(() => {
+    // URLのパラメータからユーザー情報を読み取る (簡易ログイン)
+    const params = new URLSearchParams(window.location.search);
+    const email = params.get('email');
+    const name = params.get('name');
+    if (email && name) {
+      setUser({ email, name });
     }
+  }, []);
+
+  const handleLogin = () => {
+    // バックエンドのログインURLへ移動
+    window.location.href = `${API_URL}/auth/login`;
   };
 
   return (
-    <div style={{ padding: '50px', textAlign: 'center' }}>
-      <h1>最小構成テスト</h1>
-      <p style={{ fontSize: '20px', fontWeight: 'bold' }}>{message}</p>
-      <button onClick={handleClick} style={{ padding: '10px 20px', fontSize: '16px' }}>
-        APIを叩く
-      </button>
+    <div style={{ padding: '50px', textAlign: 'center', fontFamily: 'sans-serif' }}>
+      <h1>The Negotiator 🧠</h1>
+      
+      {user ? (
+        <div>
+          <h2>ようこそ、{user.name} さん！</h2>
+          <p>Email: {user.email}</p>
+          <p>ログイン成功です🎉</p>
+        </div>
+      ) : (
+        <div>
+          <p>Googleアカウントでログインしてください</p>
+          <button 
+            onClick={handleLogin} 
+            style={{ 
+              padding: '12px 24px', 
+              fontSize: '16px', 
+              background: '#4285F4', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '5px', 
+              cursor: 'pointer' 
+            }}
+          >
+            Googleでログイン
+          </button>
+        </div>
+      )}
     </div>
   )
 }
