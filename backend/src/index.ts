@@ -12,14 +12,15 @@ const app = new Hono<{ Bindings: Bindings }>()
 
 app.use('/*', cors())
 
-app.get('/', (c) => c.json({ message: "ADHD Support Backend is Running" }))
+app.get('/', (c) => c.json({ message: "ADHD Support Backend (Powered by Gemini 3 Flash)" }))
 
 // --- 認証周り (変更なし) ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   if (!clientId) return c.text('Error: GOOGLE_CLIENT_ID not set', 500)
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=email%20profile`
+  // scopeに openid も明示的に入れておくと安心です
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=openid%20email%20profile`
   return c.redirect(url)
 })
 
@@ -56,7 +57,7 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- ★ここを修正: ADHDサポートロジック ---
+// --- ★修正: Gemini 3 Flash & ADHDサポート ---
 app.post('/api/chat', async (c) => {
   try {
     const { message } = await c.req.json()
@@ -64,26 +65,28 @@ app.post('/api/chat', async (c) => {
     
     if (!apiKey) return c.json({ reply: "【エラー】GEMINI_API_KEY が設定されていません" })
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    // ★モデルを 'gemini-3-flash' に指定 (最新版)
+    // 万が一API側でまだエイリアスが貼られていない場合は 'gemini-3-flash-preview' または 'gemini-2.5-flash' を試してください
+    const modelName = 'gemini-3-flash'; 
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     
-    // ★ADHDサポート用システムプロンプト
     const systemInstruction = `
       あなたはADHD（注意欠如・多動症）を持つユーザーをサポートする「実行機能パートナー」です。
-      ユーザーは「やる気が出ない」「タスクが多すぎる」「何からやればいいかわからない」といった悩みを抱えています。
+      「Negotiator（交渉人）」というアプリ名ですが、ここでの交渉相手は「他者」ではなく「ユーザー自身の脳」です。
 
       あなたの役割:
-      1. 共感する: ユーザーの辛さを否定せず、まずは受け止めてください。
-      2. 分解する: ユーザーのタスクを、バカバカしいほど小さな「マイクロステップ」に分解して提案してください。（例: 「レポートを書く」→「まずはPCを開くだけでOK！」）
-      3. 報酬を与える: ユーザーが相談してくれたこと自体を褒め、ゲームのスコアのように評価してください。
+      1. 共感と受容: ユーザーの「できない」「めんどくさい」を否定せず、脳の特性として受け止める。
+      2. 認知の書き換え: 巨大に見えるタスクを、笑ってしまうほど小さな「マイクロステップ」に分解して提案する。
+      3. ドーパミン報酬: ユーザーが相談したこと、些細な一歩を踏み出したことを全力で称賛し、スコア化する。
 
       【出力ルール】
-      必ず以下のJSON形式で返答してください。JSON以外のテキストは禁止です。
+      必ず以下のJSON形式のみで返答してください。Markdownや余計な挨拶は不要です。
       
       {
-        "reply": "ここに励ましの言葉と、具体的な次の1歩（マイクロステップ）を書く",
-        "score": 0〜100の整数 (相談しただけで高得点を与えて肯定感を上げてください),
-        "is_combo": trueまたはfalse (ユーザーが前向きな発言をしたり、連続でタスクをこなせそうならtrue),
-        "reason": "スコアの理由（例: タスクを言語化できただけで偉い！など）"
+        "reply": "励ましの言葉と、具体的なマイクロステップ（例: 「まずはスマホを裏返すだけでOK！」など）",
+        "score": 0〜100の整数 (相談行動自体を高評価すること。基本甘めに採点),
+        "is_combo": trueまたはfalse (ユーザーが連続して行動できそうならtrue),
+        "reason": "スコアの理由（短く褒める）"
       }
     `;
 
@@ -101,11 +104,12 @@ app.post('/api/chat', async (c) => {
     const data: any = await response.json();
 
     if (data.error) {
-      return c.json({ reply: `【Gemini Error】${data.error.message}` });
+      // エラー時にモデル名も表示して確認しやすくする
+      return c.json({ reply: `【Gemini API Error】\nModel: ${modelName}\nMessage: ${data.error.message}\nCode: ${data.error.code}` });
     }
 
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) return c.json({ reply: "AIからの返答が空でした" });
+    if (!rawText) return c.json({ reply: "AIからの返答が空でした。モデルが応答していません。" });
 
     try {
       const result = JSON.parse(rawText);
@@ -116,7 +120,7 @@ app.post('/api/chat', async (c) => {
         reply: rawText, 
         score: 10, 
         is_combo: false, 
-        reason: "解析エラーですが、AIは何か言っています" 
+        reason: "解析エラーですが、AIからのメッセージを受信しました" 
       });
     }
 
