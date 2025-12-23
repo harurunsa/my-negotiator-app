@@ -51,11 +51,11 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- ★修正: 文脈維持機能付きチャット ---
+// --- ★修正: 文脈維持ロジック ---
 app.post('/api/chat', async (c) => {
   try {
-    // ★ current_goal を受け取るように追加
-    const { message, email, action, prev_context, current_goal } = await c.req.json() 
+    // current_goal を受け取るように追加
+    const { message, email, action, prev_context, current_goal } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
@@ -65,27 +65,29 @@ app.post('/api/chat', async (c) => {
     let contextInstruction = "";
     let isExploration = false;
 
+    // ★重要: ゴールの維持
+    // ゴールが指定されている場合は、そこから逸れないように強く指示する
+    const goalInstruction = current_goal 
+      ? `【現在の大目標】: "${current_goal}"\n必ずこの目標の達成に向かって、論理的に繋がりのある次のステップを提案してください。関係のないタスク（例: 片付け中にPC作業など）は絶対禁止です。`
+      : `会話からユーザーが達成したい「大目標（例: 部屋の掃除、レポート作成）」を推測し、それに向かって誘導してください。`;
+
     if (action === 'retry') {
       contextInstruction = `
-        【状況: ユーザー拒絶】
-        直前の提案「${prev_context}」は却下されました。
+        【状況: 拒絶】
+        提案 "${prev_context}" は却下されました。
         指示:
-        1. 謝罪し、タスクの粒度をさらに半分以下にしてください。
-        2. 目標「${current_goal || '今のタスク'}」を諦めさせないでください。
+        1. 謝罪し、タスクをさらに細分化してください。
+        2. ${current_goal ? '大目標を見失わず、' : ''}ハードルを下げてください。
       `;
     } else if (action === 'next') {
-      // ★ここを修正！目標に関連するタスクのみを出させる
       isExploration = Math.random() < 0.2; 
       contextInstruction = `
         【状況: コンボ継続中！】
-        ユーザーは直前のステップを完了しました。
-        
-        ★最重要: ユーザーの現在の最終目標は【 ${current_goal} 】です。
-        
+        直前のステップ完了。ユーザーは集中しています。
         指示:
-        1. 「ナイス！」と短く褒めてください。
-        2. 目標【 ${current_goal} 】を達成するための、論理的な「次のマイクロステップ」を提示してください。
-        3. 決して関係ない話題（デスクワークなど）に飛ばないでください。文脈を維持してください。
+        1. 短く褒める。
+        2. **${goalInstruction}**
+        3. 勢いを止めない。
       `;
     } else {
       isExploration = Math.random() < 0.2;
@@ -95,12 +97,11 @@ app.post('/api/chat', async (c) => {
     let usedStyle = stylePrompt;
     if (isExploration && action !== 'retry') {
       const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
-      const mutationPrompt = `現在の接客スタイル: "${stylePrompt}"。指示: このスタイルを少しだけ変更（厳しく/優しく/短く/絵文字多め 等）して、バリエーションを作ってください。出力は説明文のみ。`;
       try {
         const mRes = await fetch(mutationUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: mutationPrompt }] }] })
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: `現在のスタイル: "${stylePrompt}"\nこれを少しだけ変更したスタイル説明文を作成せよ。` }] }] })
         });
         const mData: any = await mRes.json();
         const mutated = mData.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -112,24 +113,24 @@ app.post('/api/chat', async (c) => {
     
     const systemInstruction = `
       あなたはADHDサポートAIです。
-      【現在のスタイル】: "${usedStyle}"
-      【ユーザーの記憶】: ${userMemory}
+      【スタイル】: "${usedStyle}"
+      【記憶】: ${userMemory}
+      
+      ${goalInstruction}
       ${contextInstruction}
       
       【出力ルール】JSONのみ
       {
         "reply": "言葉",
-        "timer_seconds": 推奨タイマー秒数(整数),
+        "timer_seconds": 推奨秒数(整数),
         "score": 0〜100,
         "is_combo": boolean,
+        "detected_goal": "会話から推測される大目標（例: 部屋の掃除）。変更がなければ前の値を維持",
         "reason": "理由"
       }
     `;
 
-    // 通常会話なら入力を、アクションならトリガーを送る
-    const requestText = action === 'normal' 
-      ? `User Input: ${message}` 
-      : `(System Trigger: ${action} - Current Goal: ${current_goal})`;
+    const requestText = action === 'normal' ? `User: ${message}` : `(System: ${action})`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -147,8 +148,9 @@ app.post('/api/chat', async (c) => {
     result.used_style = usedStyle;
     result.is_exploration = isExploration;
 
+    // 通常会話なら記憶更新（省略）
     if (action === 'normal') {
-      c.executionCtx.waitUntil((async () => { /* 記憶更新処理(省略) */ })());
+      c.executionCtx.waitUntil((async () => {})());
     }
 
     return c.json(result);
@@ -158,7 +160,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// --- フィードバック (変更なし) ---
+// フィードバック（変更なし）
 app.post('/api/feedback', async (c) => {
   const { email, used_style, is_success } = await c.req.json();
   try {
