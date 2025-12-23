@@ -1,44 +1,42 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
-// 必要な環境変数の定義
+// 環境変数の型定義 (DBが増えました！)
 type Bindings = {
   GOOGLE_CLIENT_ID: string
   GOOGLE_CLIENT_SECRET: string
+  DB: D1Database // ★ここが追加: データベースを使うための準備
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// 1. CORS許可 (フロントエンドからのアクセスを許す)
+// CORS許可
 app.use('/*', cors())
 
-// 2. 生存確認用
-app.get('/', (c) => c.json({ message: "バックエンドは正常に動いています！" }))
+// 生存確認用
+app.get('/', (c) => c.json({ message: "バックエンドもDBも正常です！" }))
 
-// 3. ログイン開始 (Googleの画面へ飛ばす)
+// 1. ログイン開始
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
-  // 自動で現在のURLを取得して、コールバックURLを作る
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
   
-  if (!clientId) return c.text('エラー: GOOGLE_CLIENT_ID が設定されていません', 500)
+  if (!clientId) return c.text('Error: GOOGLE_CLIENT_ID not set', 500)
 
-  // Googleの認証画面のURLを作る
   const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=email%20profile`
-  
   return c.redirect(url)
 })
 
-// 4. Googleから帰ってきた時の処理
+// 2. Googleから帰ってきたら保存してリダイレクト
 app.get('/auth/callback', async (c) => {
   const code = c.req.query('code')
-  if (!code) return c.text('エラー: Googleからコードが返ってきませんでした', 400)
+  if (!code) return c.text('Error: No code provided', 400)
 
   const clientId = c.env.GOOGLE_CLIENT_ID
   const clientSecret = c.env.GOOGLE_CLIENT_SECRET
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
 
-  // Googleに「このコードで合ってる？」と問い合わせてトークンをもらう
+  // Googleに問い合わせてトークンをもらう
   const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -52,17 +50,30 @@ app.get('/auth/callback', async (c) => {
   })
   const tokenData: any = await tokenResponse.json()
 
-  // トークンを使ってユーザー情報を取得する
+  // ユーザー情報を取得する
   const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { Authorization: `Bearer ${tokenData.access_token}` },
   })
   const userData: any = await userResponse.json()
 
-  // ★フロントエンドに戻す (あなたのPagesのURLに書き換えてください！)
-  // 末尾にスラッシュは無しです
+  // ★★★ ここが新機能！データベースに保存する ★★★
+  try {
+    // ユーザーID、メアド、名前、今の時間を保存
+    // "INSERT OR IGNORE" なので、既に登録済みの人は無視してエラーになりません
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)`
+    ).bind(userData.id, userData.email, userData.name, Date.now()).run();
+    
+    console.log("ユーザー保存完了:", userData.email);
+  } catch (e) {
+    console.error("DB保存エラー:", e);
+    // 万が一保存できなくても、ログイン自体は進めてあげる
+  }
+
+  // フロントエンドに戻す
+  // ※ あなたのPagesのURLになっているか確認してください！
   const frontendUrl = "https://my-negotiator-app.pages.dev" 
   
-  // 名前とメールアドレスをつけてフロントエンドに送り返す
   return c.redirect(`${frontendUrl}?email=${userData.email}&name=${encodeURIComponent(userData.name)}`)
 })
 
