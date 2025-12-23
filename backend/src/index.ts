@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
-// 環境変数の型定義
+// 必要な環境変数の定義
 type Bindings = {
   GOOGLE_CLIENT_ID: string
   GOOGLE_CLIENT_SECRET: string
@@ -9,35 +9,36 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// CORS許可
+// 1. CORS許可 (フロントエンドからのアクセスを許す)
 app.use('/*', cors())
 
-// ルート確認用
-app.get('/', (c) => c.json({ message: "バックエンドは正常です！" }))
+// 2. 生存確認用
+app.get('/', (c) => c.json({ message: "バックエンドは正常に動いています！" }))
 
-// 1. Googleログインページへリダイレクトさせる
+// 3. ログイン開始 (Googleの画面へ飛ばす)
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
-  if (!clientId) return c.text('Error: GOOGLE_CLIENT_ID not set', 500)
-
-  // バックエンドのURLを自動取得してコールバックURLを作る
+  // 自動で現在のURLを取得して、コールバックURLを作る
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
   
+  if (!clientId) return c.text('エラー: GOOGLE_CLIENT_ID が設定されていません', 500)
+
+  // Googleの認証画面のURLを作る
   const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=email%20profile`
   
   return c.redirect(url)
 })
 
-// 2. Googleから帰ってきたらトークンを交換してユーザー情報を取る
+// 4. Googleから帰ってきた時の処理
 app.get('/auth/callback', async (c) => {
   const code = c.req.query('code')
-  if (!code) return c.text('Error: No code provided', 400)
+  if (!code) return c.text('エラー: Googleからコードが返ってきませんでした', 400)
 
   const clientId = c.env.GOOGLE_CLIENT_ID
   const clientSecret = c.env.GOOGLE_CLIENT_SECRET
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
 
-  // Googleに「このコードで合ってる？」と問い合わせる
+  // Googleに「このコードで合ってる？」と問い合わせてトークンをもらう
   const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -51,18 +52,17 @@ app.get('/auth/callback', async (c) => {
   })
   const tokenData: any = await tokenResponse.json()
 
-  // ユーザー情報を取得する
+  // トークンを使ってユーザー情報を取得する
   const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { Authorization: `Bearer ${tokenData.access_token}` },
   })
   const userData: any = await userResponse.json()
 
-  // ★重要: 本番ではここでDBに保存したり、JWTクッキーを発行したりします。
-  // 今回はテスト用に、フロントエンドにメールアドレス付きでリダイレクトします。
-  // あなたのフロントエンドURL (pages.dev) に書き換えてください！
-  // ↓↓↓↓↓↓
+  // ★フロントエンドに戻す (あなたのPagesのURLに書き換えてください！)
+  // 末尾にスラッシュは無しです
   const frontendUrl = "https://my-negotiator-app.pages.dev" 
   
+  // 名前とメールアドレスをつけてフロントエンドに送り返す
   return c.redirect(`${frontendUrl}?email=${userData.email}&name=${encodeURIComponent(userData.name)}`)
 })
 
