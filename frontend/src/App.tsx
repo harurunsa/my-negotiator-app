@@ -8,9 +8,13 @@ function App() {
   const [chatLog, setChatLog] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   
-  // ★タイマー関連のstate
+  // ★今の目標を覚えておくためのState
+  const [currentGoal, setCurrentGoal] = useState("");
+
+  // タイマー関連
   const [timerActive, setTimerActive] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [totalTime, setTotalTime] = useState(0); // 割合計算用
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -25,12 +29,10 @@ function App() {
     }
   }, []);
 
-  // タイマーのカウントダウン処理
   useEffect(() => {
     if (timerActive && timeLeft > 0) {
       timerRef.current = window.setTimeout(() => setTimeLeft(prev => prev - 1), 1000);
     } else if (timerActive && timeLeft === 0) {
-      // ★タイマー完了！ -> 自動で「次のタスク」を要求
       handleTimerComplete();
     }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
@@ -38,32 +40,34 @@ function App() {
 
   const handleTimerComplete = () => {
     setTimerActive(false);
-    playNotificationSound(); // 音を鳴らす（関数は下部に定義）
-    // AIに「次！」とリクエスト
+    playNotificationSound();
+    // タイマー完了＝コンボ継続なので、ゴールを維持して次へ
     sendMessage(null, 'next');
   };
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
-  // messageがnullの場合は、action ('retry' or 'next') を送る
   const sendMessage = async (manualMessage: string | null, action: 'normal' | 'retry' | 'next' = 'normal') => {
     if (action === 'normal' && !manualMessage?.trim()) return;
     
-    // ユーザーのログ表示 (normalの時だけ)
+    // ★ここが重要: 通常会話なら、それが「今回の目標」になるので保存する
+    if (action === 'normal' && manualMessage) {
+      setCurrentGoal(manualMessage); 
+    }
+
     let newLog = [...chatLog];
     if (action === 'normal' && manualMessage) {
       newLog.push({ role: "user", text: manualMessage });
     } else if (action === 'retry') {
       newLog.push({ role: "system", text: "😰 難しすぎます..." });
     } else if (action === 'next') {
-      newLog.push({ role: "system", text: "✅ タスク完了！次へ！" });
+      newLog.push({ role: "system", text: "✅ 完了！次のステップへ" });
     }
     
     setChatLog(newLog);
     if(manualMessage) setInput("");
     setLoading(true);
 
-    // 直前のAIのメッセージ（リトライ時に使用）
     const lastAiMsg = chatLog.length > 0 ? chatLog[chatLog.length - 1].text : "";
 
     try {
@@ -74,7 +78,8 @@ function App() {
           message: manualMessage, 
           email: user?.email, 
           action, 
-          prev_context: lastAiMsg 
+          prev_context: lastAiMsg,
+          current_goal: currentGoal // ★AIに目標を思い出させる
         }),
       });
       const data = await res.json();
@@ -84,7 +89,7 @@ function App() {
         text: data.reply, 
         used_style: data.used_style,
         is_exploration: data.is_exploration,
-        timer_seconds: data.timer_seconds, // AIが指定した秒数
+        timer_seconds: data.timer_seconds,
         feedback_done: false
       }]);
     } catch (error) {
@@ -94,16 +99,12 @@ function App() {
     }
   };
 
-  // フィードバック送信
   const handleFeedback = async (index: number, used_style: string, is_success: boolean, suggestedTimer: number) => {
     if (!user) return;
-    
-    // UI更新
     const updatedLog = [...chatLog];
     updatedLog[index].feedback_done = true;
     setChatLog(updatedLog);
 
-    // バックエンドへ通知
     fetch(`${API_URL}/api/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -113,17 +114,16 @@ function App() {
     });
 
     if (is_success) {
-      // ★採用！ -> タイマー起動
-      setTimeLeft(suggestedTimer || 180); // デフォルト3分
+      const t = suggestedTimer || 180;
+      setTotalTime(t); // 全体時間をセット
+      setTimeLeft(t);
       setTimerActive(true);
     } else {
-      // ★却下！ -> リトライリクエスト
       sendMessage(null, 'retry');
     }
   };
 
   const playNotificationSound = () => {
-    // 簡易的なビープ音
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const oscillator = audioCtx.createOscillator();
@@ -131,45 +131,90 @@ function App() {
       oscillator.connect(gainNode);
       gainNode.connect(audioCtx.destination);
       oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
       gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
       oscillator.start();
       oscillator.stop(audioCtx.currentTime + 0.2);
     } catch(e) {}
   };
 
-  // 秒数を mm:ss 表記に
-  const formatTime = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  // ★円形タイマーコンポーネント (SVG)
+  const CircleTimer = () => {
+    const radius = 60; // 半径を大きく
+    const stroke = 12;
+    const normalizedRadius = radius - stroke * 2;
+    const circumference = normalizedRadius * 2 * Math.PI;
+    const strokeDashoffset = circumference - (timeLeft / totalTime) * circumference;
+    
+    // 残り時間に応じた色変化
+    const percentage = timeLeft / totalTime;
+    let color = '#00e676'; // 緑
+    if (percentage < 0.5) color = '#ffeb3b'; // 黄
+    if (percentage < 0.2) color = '#ff1744'; // 赤
+
+    return (
+      <div style={{
+        position: 'fixed', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
+        background: 'rgba(30,30,30,0.95)', padding: '20px', borderRadius: '50%',
+        boxShadow: '0 10px 30px rgba(0,0,0,0.4)', zIndex: 100,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        width: '180px', height: '180px' // 全体サイズ
+      }}>
+        <div style={{position: 'relative', width: radius * 2.5, height: radius * 2.5}}>
+          <svg height={radius * 2.5} width={radius * 2.5} style={{transform: 'rotate(-90deg)'}}>
+            <circle
+              stroke="#444"
+              strokeWidth={stroke}
+              r={normalizedRadius}
+              cx={radius * 1.25}
+              cy={radius * 1.25}
+              fill="transparent"
+            />
+            <circle
+              stroke={color}
+              strokeWidth={stroke}
+              strokeDasharray={circumference + ' ' + circumference}
+              style={{ strokeDashoffset, transition: 'stroke-dashoffset 1s linear, stroke 1s linear' }}
+              strokeLinecap="round"
+              r={normalizedRadius}
+              cx={radius * 1.25}
+              cy={radius * 1.25}
+              fill="transparent"
+            />
+          </svg>
+          <div style={{
+            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            textAlign: 'center', color: '#fff'
+          }}>
+            <div style={{fontSize: '2rem', fontWeight: 'bold', fontFamily: 'monospace'}}>
+              {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+            </div>
+            <div style={{fontSize: '0.8rem', color: '#aaa', marginTop: '5px'}}>FOCUS</div>
+          </div>
+        </div>
+        
+        {/* キャンセルボタンを下に配置 */}
+        <button onClick={handleTimerComplete} style={{
+          marginTop: '10px', background: 'transparent', border: '1px solid #666', 
+          color: '#aaa', padding: '5px 15px', borderRadius: '15px', cursor: 'pointer', fontSize: '0.8rem'
+        }}>
+          完了にする
+        </button>
+      </div>
+    );
   };
 
   return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '0 auto', padding: '20px', paddingBottom: '100px' }}>
+    <div style={{ fontFamily: 'sans-serif', maxWidth: '600px', margin: '0 auto', padding: '20px', paddingBottom: '220px' }}>
       
-      {/* --- タイマーオーバーレイ (コンボ中のみ表示) --- */}
-      {timerActive && (
-        <div style={{
-          position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
-          background: '#222', color: '#fff', padding: '15px 30px', borderRadius: '30px',
-          boxShadow: '0 5px 20px rgba(0,0,0,0.3)', zIndex: 100, display: 'flex', alignItems: 'center', gap: '15px'
-        }}>
-          <div style={{fontSize: '0.8rem', color: '#aaa'}}>FOCUS</div>
-          <div style={{fontSize: '2rem', fontWeight: 'bold', fontFamily: 'monospace', color: '#00e676'}}>
-            {formatTime(timeLeft)}
-          </div>
-          <button onClick={handleTimerComplete} style={{...miniBtnStyle, background: 'transparent', border: '1px solid #555'}}>
-            完了!
-          </button>
-        </div>
-      )}
+      {/* タイマー表示 */}
+      {timerActive && <CircleTimer />}
 
       {/* ヘッダー */}
       <header style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#333', color: 'white', padding: '15px', borderRadius: '12px' }}>
         <div>
-          <h1 style={{fontSize: '1.2rem', margin: 0}}>Combo AI ⚡</h1>
-          {user && <span style={{fontSize: '0.8rem', color: '#bbb'}}>{user.is_pro ? "PRO" : "Free"}</span>}
+          <h1 style={{fontSize: '1.2rem', margin: 0}}>Negotiator AI 🧠</h1>
+          {currentGoal && <div style={{fontSize: '0.8rem', color: '#4fc3f7', marginTop: '5px'}}>Goal: {currentGoal}</div>}
         </div>
         {user && (
            <div style={{textAlign: 'right'}}>
@@ -189,14 +234,12 @@ function App() {
             {chatLog.map((log, i) => (
               <div key={i} style={{ textAlign: log.role === 'user' ? 'right' : (log.role === 'system' ? 'center' : 'left'), margin: '15px 0' }}>
                 
-                {/* システムメッセージ（リトライ/完了通知） */}
                 {log.role === 'system' && (
                   <span style={{fontSize: '12px', color: '#888', background: '#eee', padding: '4px 8px', borderRadius: '10px'}}>
                     {log.text}
                   </span>
                 )}
 
-                {/* ユーザーとAIのメッセージ */}
                 {log.role !== 'system' && (
                   <div style={{ 
                     display: 'inline-block', 
@@ -210,14 +253,13 @@ function App() {
                   }}>
                     {log.text}
 
-                    {/* アクションボタン: AI発言 かつ 未評価 かつ タイマー中でない時 */}
                     {log.role === 'ai' && !log.feedback_done && !timerActive && (
                       <div style={{marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #eee', display: 'flex', gap: '8px', justifyContent: 'flex-end'}}>
                         <button 
                           onClick={() => handleFeedback(i, log.used_style, true, log.timer_seconds)} 
                           style={{...miniBtnStyle, background: '#28a745', padding: '8px 16px', fontSize: '14px'}}
                         >
-                          👍 最高 (やる)
+                          👍 やる (Start)
                         </button>
                         <button 
                           onClick={() => handleFeedback(i, log.used_style, false, 0)} 
@@ -234,13 +276,13 @@ function App() {
              {loading && <p style={{fontSize: '12px', color: '#888', textAlign: 'center'}}>Thinking...</p>}
           </div>
 
-          {/* 入力エリア (タイマー中は非表示推奨だが、一応残す) */}
+          {/* 入力エリア */}
           <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
             <input 
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && sendMessage(input, 'normal')}
-              placeholder="話しかける..."
+              placeholder="新しいタスクを始める..."
               disabled={timerActive}
               style={{ flex: 1, padding: '15px', border: '1px solid #ddd', borderRadius: '30px', fontSize: '16px' }}
             />
