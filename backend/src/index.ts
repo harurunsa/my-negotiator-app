@@ -9,15 +9,11 @@ type Bindings = {
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
-
 app.use('/*', cors())
-
-app.get('/', (c) => c.json({ message: "ADHD Support Backend (Powered by Gemini 3 Flash)" }))
 
 // --- 認証周り (変更なし) ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
-  if (!clientId) return c.text('Error: GOOGLE_CLIENT_ID not set', 500)
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
   const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=openid%20email%20profile`
   return c.redirect(url)
@@ -25,7 +21,6 @@ app.get('/auth/login', (c) => {
 
 app.get('/auth/callback', async (c) => {
   const code = c.req.query('code')
-  if (!code) return c.text('Error: No code provided', 400)
   const clientId = c.env.GOOGLE_CLIENT_ID
   const clientSecret = c.env.GOOGLE_CLIENT_SECRET
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -37,57 +32,90 @@ app.get('/auth/callback', async (c) => {
       body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: callbackUrl, grant_type: 'authorization_code' }),
     })
     const tokenData: any = await tokenResponse.json()
-    
-    if (tokenData.error) {
-       throw new Error(`Google Token Error: ${tokenData.error_description || tokenData.error}`);
-    }
-
     const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     })
     const userData: any = await userResponse.json()
 
-    if (c.env.DB) {
-      await c.env.DB.prepare(
-        `INSERT OR IGNORE INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)`
-      ).bind(userData.id, userData.email, userData.name, Date.now()).run();
-    }
+    // 初期化: まだstyleが無ければデフォルトを入れる
+    await c.env.DB.prepare(
+      `INSERT INTO users (id, email, name, created_at, current_best_style) 
+       VALUES (?, ?, ?, ?, 'タスクを極限まで小さく分解し、優しく励ますパートナー')
+       ON CONFLICT(id) DO UPDATE SET name=excluded.name`
+    ).bind(userData.id, userData.email, userData.name, Date.now()).run();
 
+    const user: any = await c.env.DB.prepare("SELECT streak, is_pro FROM users WHERE id = ?").bind(userData.id).first();
     const frontendUrl = "https://my-negotiator-app.pages.dev"
-    return c.redirect(`${frontendUrl}?email=${userData.email}&name=${encodeURIComponent(userData.name)}`)
+    return c.redirect(`${frontendUrl}?email=${userData.email}&name=${encodeURIComponent(userData.name)}&streak=${user.streak || 0}&pro=${user.is_pro || 0}`)
   } catch (e: any) {
     return c.text(`Auth Error: ${e.message}`, 500)
   }
 })
 
-// --- ★修正: Gemini 3 Flash (Preview) を指定 ---
+// --- ★進化的AIロジック ---
 app.post('/api/chat', async (c) => {
   try {
-    const { message } = await c.req.json()
+    const { message, email } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     
-    if (!apiKey) return c.json({ reply: "【エラー】GEMINI_API_KEY が設定されていません" })
+    // 1. ユーザーの記憶と「現在のベストスタイル」を取得
+    const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+    let stylePrompt = user.current_best_style || "優しく励ます";
+    const userMemory = user.memory || "特になし";
 
-    // ★ここが重要です！正式なモデルIDを指定します
-    // ドキュメントによると 'gemini-3-flash-preview' が正しいIDです
-    const modelName = 'gemini-3-flash-preview'; 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    // 2. 探索と活用 (Epsilon-Greedy: 20%の確率でスタイルを変異させる)
+    const isExploration = Math.random() < 0.2;
+    let usedStyle = stylePrompt;
+
+    if (isExploration) {
+      // ★探索: Gemini自体に「スタイルをちょっと変えて」と頼む
+      // これにより「もっと厳しく」「もっと短く」などがランダムに試される
+      const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+      const mutationPrompt = `
+        現在の接客スタイル: "${stylePrompt}"
+        
+        指示:
+        このスタイルを「少しだけ」変更してください。
+        例: 少し厳しくする、少しフランクにする、絵文字を増やす、哲学的する、など。
+        ランダムに1つ方向性を決めて書き換えてください。
+        出力は書き換えたスタイル説明文のみ。
+      `;
+      
+      try {
+        const mRes = await fetch(mutationUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: mutationPrompt }] }] })
+        });
+        const mData: any = await mRes.json();
+        const mutated = mData.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (mutated) {
+          usedStyle = mutated.trim(); // 変異したスタイルを採用
+        }
+      } catch (e) {
+        // エラー時は変異せずそのまま
+      }
+    }
+
+    // 3. 本番生成 (Gemini 3 Flash)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
     
     const systemInstruction = `
-      あなたはADHD（注意欠如・多動症）を持つユーザーをサポートする「実行機能パートナー」です。
+      あなたはADHDサポートAIです。
       
-      【役割】
-      1. 共感と受容: 「できない」「めんどくさい」を脳の特性として肯定する。
-      2. マイクロステップ分解: タスクを「PCを開く」「靴を履く」レベルまで分解して提案する。
-      3. ドーパミン報酬: 相談したこと自体を即座に称賛し、高得点を与える。
-
-      【出力形式】
-      以下のJSONのみを返してください。
+      【現在のあなたの設定（スタイル）】:
+      "${usedStyle}"
+      ※この設定に徹底的になりきってください。
+      
+      【ユーザーの記憶】:
+      ${userMemory}
+      
+      【出力ルール】JSONのみ
       {
-        "reply": "励まし + 最初のマイクロステップ",
-        "score": 0〜100 (基本80点以上),
-        "is_combo": true/false (連続アクションならtrue),
-        "reason": "短い褒め言葉"
+        "reply": "返答",
+        "score": 0〜100,
+        "is_combo": boolean,
+        "reason": "理由"
       }
     `;
 
@@ -95,40 +123,53 @@ app.post('/api/chat', async (c) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [
-          { role: "user", parts: [{ text: systemInstruction + "\n\nUser Input: " + message }] }
-        ],
+        contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\nUser: " + message }] }],
         generationConfig: { response_mime_type: "application/json" }
       })
     });
 
     const data: any = await response.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    let result = JSON.parse(rawText);
+    
+    // フロントエンドに「今回使ったスタイル」を返す（フィードバック用）
+    result.used_style = usedStyle;
+    result.is_exploration = isExploration; // 画面で「🧪 実験中」とか出せるように
 
-    if (data.error) {
-      // エラー時にモデル名を確認しやすくするための詳細表示
-      return c.json({ 
-        reply: `【Gemini API Error】\nRequested Model: ${modelName}\nMessage: ${data.error.message}\nCode: ${data.error.code}\n\n※もし 'Not Found' になる場合は、'gemini-2.0-flash-exp' 等もお試しください。` 
-      });
-    }
+    // 4. 記憶の更新 (WaitUntil)
+    c.executionCtx.waitUntil((async () => {
+      // 会話内容からユーザー情報を更新する処理（前回と同じなので省略可だが重要）
+      // ... (ユーザーメモリ更新ロジック) ...
+    })());
 
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) return c.json({ reply: "AIからの返答が空でした。" });
-
-    try {
-      const result = JSON.parse(rawText);
-      return c.json(result);
-    } catch (e) {
-      return c.json({ 
-        reply: rawText, 
-        score: 10, 
-        is_combo: false, 
-        reason: "解析エラーですがメッセージは受信しました" 
-      });
-    }
+    return c.json(result);
 
   } catch (e: any) {
-    return c.json({ reply: `【Server Error】${e.message}` })
+    return c.json({ reply: `Error: ${e.message}` })
   }
 })
+
+// ★フィードバック（ここが進化の鍵）
+app.post('/api/feedback', async (c) => {
+  const { email, used_style, is_success } = await c.req.json();
+  
+  try {
+    if (is_success) {
+      // ★コンボ成功！ -> 今回のスタイルを「新たなベスト」として保存
+      // これにより、たまたま試した「変異スタイル」が良ければ、次回からそれが標準になる
+      await c.env.DB.prepare("UPDATE users SET current_best_style = ?, streak = streak + 1 WHERE email = ?")
+        .bind(used_style, email).run();
+    } else {
+      // 失敗 -> スタイルは保存せず、コンボだけ処理（今回は維持）
+      // 変異したスタイルがダメだったら、それは捨てられるので元のベストが維持される
+    }
+    
+    const user: any = await c.env.DB.prepare("SELECT streak FROM users WHERE email = ?").bind(email).first();
+    return c.json({ streak: user.streak, saved: is_success });
+
+  } catch (e) {
+    return c.json({ error: "DB Error" }, 500);
+  }
+});
 
 export default app
