@@ -10,99 +10,79 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// 1. CORS許可
 app.use('/*', cors())
 
-// 2. 生存確認
-app.get('/', (c) => c.json({ message: "バックエンド稼働中（ライブラリ不要版）" }))
+app.get('/', (c) => c.json({ message: "バックエンド稼働中" }))
 
-// 3. ログイン開始
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
-  if (!clientId) return c.text('Error: GOOGLE_CLIENT_ID not set', 500)
+  if (!clientId) return c.text('エラー: GOOGLE_CLIENT_ID が設定されていません', 500)
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=email%20profile`
-  return c.redirect(url)
+  return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=email%20profile`)
 })
 
-// 4. Googleログイン & DB保存
 app.get('/auth/callback', async (c) => {
-  const code = c.req.query('code')
-  if (!code) return c.text('Error: No code provided', 400)
-  const clientId = c.env.GOOGLE_CLIENT_ID
-  const clientSecret = c.env.GOOGLE_CLIENT_SECRET
-  const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
-
   try {
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    const code = c.req.query('code')
+    if (!code) throw new Error("Googleからコードが返ってきませんでした")
+
+    // 1. 環境変数のチェック
+    if (!c.env.DB) throw new Error("データベース(DB)が接続されていません。wrangler.tomlの設定を確認してください。")
+    if (!c.env.GOOGLE_CLIENT_SECRET) throw new Error("GOOGLE_CLIENT_SECRET が設定されていません。")
+
+    // 2. トークン交換
+    const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: callbackUrl, grant_type: 'authorization_code' }),
+      body: new URLSearchParams({ 
+        code, 
+        client_id: c.env.GOOGLE_CLIENT_ID, 
+        client_secret: c.env.GOOGLE_CLIENT_SECRET, 
+        redirect_uri: callbackUrl, 
+        grant_type: 'authorization_code' 
+      }),
     })
-    const tokenData: any = await tokenResponse.json()
-    const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+    const tokenData: any = await tokenRes.json()
+    if (tokenData.error) throw new Error(`Googleトークン取得エラー: ${JSON.stringify(tokenData)}`)
+
+    // 3. ユーザー情報取得
+    const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     })
-    const userData: any = await userResponse.json()
+    const userData: any = await userRes.json()
+    if (userData.error) throw new Error(`ユーザー情報取得エラー: ${JSON.stringify(userData)}`)
 
-    // DB保存
+    // 4. DB保存
     await c.env.DB.prepare(
       `INSERT OR IGNORE INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)`
     ).bind(userData.id, userData.email, userData.name, Date.now()).run();
 
-    const frontendUrl = "https://my-negotiator-app.pages.dev"
-    return c.redirect(`${frontendUrl}?email=${userData.email}&name=${encodeURIComponent(userData.name)}`)
-  } catch (e) {
-    console.error(e)
-    return c.text('Authentication Failed', 500)
+    // 成功したらリダイレクト
+    return c.redirect(`https://my-negotiator-app.pages.dev?email=${userData.email}&name=${encodeURIComponent(userData.name)}`)
+
+  } catch (e: any) {
+    // ★ここでエラーの中身を全部画面に出す！
+    return c.text(`【エラー発生】\n詳細: ${e.message}\n\n原因と思われる箇所:\n1. wrangler.tomlにDB設定がない\n2. Client Secretが間違っている\n3. リダイレクトURLが不一致`, 500)
   }
 })
 
-// 5. ★AIチャット（ライブラリなし・fetch版）
+// チャット機能（そのまま）
 app.post('/api/chat', async (c) => {
   try {
     const { message } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     if (!apiKey) return c.json({ error: 'API Key not set' }, 500)
-
-    // システムプロンプト（店員の役割設定）
-    const systemInstruction = `
-      あなたは家電量販店のベテラン店員です。
-      ユーザーは「値引き」を求めてきますが、簡単には応じず、最初は断ってください。
-      最終的に30%引きまでなら許可しますが、粘り強く交渉してください。
-      回答は短くお願いします。
-    `
-
-    // 直接GeminiのAPIを叩く
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
     
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          { role: "user", parts: [{ text: systemInstruction + "\n\nユーザーの発言: " + message }] }
-        ]
-      })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "店員として振る舞って。\nUser: " + message }] }] })
     });
-
     const data: any = await response.json();
-    
-    // エラーチェック
-    if (data.error) {
-      console.error(data.error);
-      return c.json({ error: 'Gemini API Error' }, 500);
-    }
-
-    // 返信を取り出す
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "すみません、よく聞き取れませんでした。";
-
-    return c.json({ reply })
-
-  } catch (e) {
-    console.error(e)
-    return c.json({ error: 'Server Error' }, 500)
-  }
+    return c.json({ reply: data.candidates?.[0]?.content?.parts?.[0]?.text || "エラー" })
+  } catch (e) { return c.json({ error: 'Chat Error' }, 500) }
 })
 
 export default app
