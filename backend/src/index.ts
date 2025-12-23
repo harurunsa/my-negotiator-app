@@ -19,7 +19,6 @@ app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   if (!clientId) return c.text('Error: GOOGLE_CLIENT_ID not set', 500)
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
-  // scopeに openid も明示的に入れておくと安心です
   const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=openid%20email%20profile`
   return c.redirect(url)
 })
@@ -38,12 +37,16 @@ app.get('/auth/callback', async (c) => {
       body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: callbackUrl, grant_type: 'authorization_code' }),
     })
     const tokenData: any = await tokenResponse.json()
+    
+    if (tokenData.error) {
+       throw new Error(`Google Token Error: ${tokenData.error_description || tokenData.error}`);
+    }
+
     const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     })
     const userData: any = await userResponse.json()
 
-    // DB保存
     if (c.env.DB) {
       await c.env.DB.prepare(
         `INSERT OR IGNORE INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)`
@@ -57,7 +60,7 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- ★修正: Gemini 3 Flash & ADHDサポート ---
+// --- ★修正: Gemini 3 Flash (Preview) を指定 ---
 app.post('/api/chat', async (c) => {
   try {
     const { message } = await c.req.json()
@@ -65,28 +68,26 @@ app.post('/api/chat', async (c) => {
     
     if (!apiKey) return c.json({ reply: "【エラー】GEMINI_API_KEY が設定されていません" })
 
-    // ★モデルを 'gemini-3-flash' に指定 (最新版)
-    // 万が一API側でまだエイリアスが貼られていない場合は 'gemini-3-flash-preview' または 'gemini-2.5-flash' を試してください
-    const modelName = 'gemini-3-flash'; 
+    // ★ここが重要です！正式なモデルIDを指定します
+    // ドキュメントによると 'gemini-3-flash-preview' が正しいIDです
+    const modelName = 'gemini-3-flash-preview'; 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     
     const systemInstruction = `
       あなたはADHD（注意欠如・多動症）を持つユーザーをサポートする「実行機能パートナー」です。
-      「Negotiator（交渉人）」というアプリ名ですが、ここでの交渉相手は「他者」ではなく「ユーザー自身の脳」です。
-
-      あなたの役割:
-      1. 共感と受容: ユーザーの「できない」「めんどくさい」を否定せず、脳の特性として受け止める。
-      2. 認知の書き換え: 巨大に見えるタスクを、笑ってしまうほど小さな「マイクロステップ」に分解して提案する。
-      3. ドーパミン報酬: ユーザーが相談したこと、些細な一歩を踏み出したことを全力で称賛し、スコア化する。
-
-      【出力ルール】
-      必ず以下のJSON形式のみで返答してください。Markdownや余計な挨拶は不要です。
       
+      【役割】
+      1. 共感と受容: 「できない」「めんどくさい」を脳の特性として肯定する。
+      2. マイクロステップ分解: タスクを「PCを開く」「靴を履く」レベルまで分解して提案する。
+      3. ドーパミン報酬: 相談したこと自体を即座に称賛し、高得点を与える。
+
+      【出力形式】
+      以下のJSONのみを返してください。
       {
-        "reply": "励ましの言葉と、具体的なマイクロステップ（例: 「まずはスマホを裏返すだけでOK！」など）",
-        "score": 0〜100の整数 (相談行動自体を高評価すること。基本甘めに採点),
-        "is_combo": trueまたはfalse (ユーザーが連続して行動できそうならtrue),
-        "reason": "スコアの理由（短く褒める）"
+        "reply": "励まし + 最初のマイクロステップ",
+        "score": 0〜100 (基本80点以上),
+        "is_combo": true/false (連続アクションならtrue),
+        "reason": "短い褒め言葉"
       }
     `;
 
@@ -104,23 +105,24 @@ app.post('/api/chat', async (c) => {
     const data: any = await response.json();
 
     if (data.error) {
-      // エラー時にモデル名も表示して確認しやすくする
-      return c.json({ reply: `【Gemini API Error】\nModel: ${modelName}\nMessage: ${data.error.message}\nCode: ${data.error.code}` });
+      // エラー時にモデル名を確認しやすくするための詳細表示
+      return c.json({ 
+        reply: `【Gemini API Error】\nRequested Model: ${modelName}\nMessage: ${data.error.message}\nCode: ${data.error.code}\n\n※もし 'Not Found' になる場合は、'gemini-2.0-flash-exp' 等もお試しください。` 
+      });
     }
 
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) return c.json({ reply: "AIからの返答が空でした。モデルが応答していません。" });
+    if (!rawText) return c.json({ reply: "AIからの返答が空でした。" });
 
     try {
       const result = JSON.parse(rawText);
       return c.json(result);
     } catch (e) {
-      // JSONパース失敗時の救済措置
       return c.json({ 
         reply: rawText, 
         score: 10, 
         is_combo: false, 
-        reason: "解析エラーですが、AIからのメッセージを受信しました" 
+        reason: "解析エラーですがメッセージは受信しました" 
       });
     }
 
