@@ -11,7 +11,29 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
-// --- 1. Google認証 ---
+// --- 言語定義 ---
+const MESSAGES = {
+  ja: {
+    system_retry: "😰 ハードルを極限まで下げています...",
+    system_next: "🚀 ナイス！次のステップへ！",
+    retry_instruction: "【緊急: ユーザー拒絶】直前の提案は却下されました。即座に謝罪し、タスクを物理的最小単位（指一本動かすだけ等）に分解してください。精神論は禁止。",
+    next_instruction: "【コンボ継続中！】短くテンション高く褒めて、間髪入れずに次のステップを出してください。",
+    goal_instruction: (goal: string) => `【絶対目標】: "${goal}"\n(※全ての提案はこの達成に向かうこと。関係ない話題は禁止)`,
+    goal_default: "会話からユーザーのゴールを推測し、そこにロックオンしてください。",
+    ai_persona: "あなたはADHDの脳特性をハックする実行機能拡張AIです。"
+  },
+  en: {
+    system_retry: "😰 Lowering the hurdle to the absolute limit...",
+    system_next: "🚀 Nice work! Next step!",
+    retry_instruction: "[URGENT: User Rejection] The previous proposal was rejected. Apologize immediately and break the task down to the absolute physical minimum. No motivational speeches.",
+    next_instruction: "[COMBO ACTIVE!] Praise shortly and energetically, then present the next step immediately.",
+    goal_instruction: (goal: string) => `[ABSOLUTE GOAL]: "${goal}"\n(*All proposals must lead to this. No distractions.)`,
+    goal_default: "Infer the user's current goal from the conversation and lock onto it.",
+    ai_persona: "You are an Executive Function Augmentation AI that hacks ADHD brain characteristics."
+  }
+};
+
+// --- 認証 (変更なし) ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -37,10 +59,8 @@ app.get('/auth/callback', async (c) => {
     })
     const userData: any = await userResponse.json()
 
-    // ユーザー初期化（既存ユーザーなら名前だけ更新、記憶やスタイルは維持）
     await c.env.DB.prepare(
-      `INSERT INTO users (id, email, name, created_at) 
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO users (id, email, name, created_at) VALUES (?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name=excluded.name`
     ).bind(userData.id, userData.email, userData.name, Date.now()).run();
 
@@ -52,154 +72,136 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- 2. メインチャット機能（進化＆記憶） ---
+// --- ★修正版チャットAPI ---
 app.post('/api/chat', async (c) => {
   try {
-    const { message, email, action, prev_context, current_goal } = await c.req.json()
+    const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
+    const t = (MESSAGES as any)[lang] || MESSAGES.ja;
     
-    // ユーザー情報のロード
+    // DB取得
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
-    let stylePrompt = user.current_best_style || "優しく励ます"; // 現在の最適スタイル
-    const userMemory = user.memory || "特になし"; // 長期記憶
+    let stylePrompt = user.current_best_style || (lang === 'en' ? "Supportive partner" : "優しく励ますパートナー");
+    const userMemory = user.memory || "";
 
+    // プロンプト作成
     let contextInstruction = "";
-    let isExploration = false; // 今回「実験（変異）」をするかどうか
+    const goalInstruction = current_goal ? t.goal_instruction(current_goal) : t.goal_default;
+    let isExploration = false;
 
-    // ゴール維持指示
-    const goalInstruction = current_goal 
-      ? `【絶対目標】: "${current_goal}"\n(※全ての提案はこの達成に向かうこと。関係ない話題へ逸れるのは禁止)`
-      : `会話から「ユーザーが今達成したいゴール」を推測し、そこにロックオンしてください。`;
-
-    // アクション分岐
     if (action === 'retry') {
-      // ★「無理」と言われた時: 徹底的にハードルを下げる
-      contextInstruction = `
-        【緊急: ユーザー拒絶】
-        直前の提案 "${prev_context}" は却下されました。
-        指示:
-        1. 即座に謝罪してください。
-        2. タスクを「物理的に可能な最小単位（指を動かすだけ等）」まで分解してください。
-        3. 精神論禁止。物理的なイージーさを提示すること。
-      `;
+      const safeContext = prev_context ? prev_context.substring(0, 100) : "previous task";
+      contextInstruction = t.retry_instruction + `\n(Rejected: "${safeContext}")`;
     } else if (action === 'next') {
-      // ★コンボ中: 勢いを殺さない
-      // ここで少し「実験（口調の変化）」を混ぜる確率を上げる
-      isExploration = Math.random() < 0.3; 
-      contextInstruction = `
-        【コンボ継続中！】
-        指示:
-        1. 短くテンション高く褒める。
-        2. 間髪入れずに次のステップを出す。
-      `;
+      isExploration = Math.random() < 0.3;
+      contextInstruction = t.next_instruction;
     } else {
-      // 通常会話: 20%で変異
       isExploration = Math.random() < 0.2;
     }
 
-    // ★進化的アルゴリズム: スタイルの突然変異
+    // 変異ロジック (エラーが出ても無視して進む)
     let usedStyle = stylePrompt;
     if (isExploration && action !== 'retry') {
-      const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
       try {
-        const mRes = await fetch(mutationUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: `現在の接客スタイル: "${stylePrompt}"\nこれのバリエーション（少し厳しく/もっとフランクになど）を1つ作成せよ。出力は説明文のみ。` }] }] })
-        });
+        const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        const mBody = { contents: [{ role: "user", parts: [{ text: `Variation of: "${stylePrompt}"` }] }] };
+        const mRes = await fetch(mutationUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mBody) });
         const mData: any = await mRes.json();
         const mutated = mData.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (mutated) usedStyle = mutated.trim(); // 変異スタイル採用
+        if (mutated) usedStyle = mutated.trim();
       } catch (e) {}
     }
 
-    // Geminiへのリクエスト
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    // 本番リクエスト (gemini-1.5-flashを使用)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
     
     const systemInstruction = `
-      あなたはADHDの脳特性をハックする実行機能拡張AIです。
-      【現在のペルソナ】: "${usedStyle}"
-      【ユーザーの記憶】: ${userMemory}
-      
+      ${t.ai_persona}
+      [Language]: ${lang === 'en' ? 'English' : 'Japanese'}
+      [Style]: "${usedStyle}"
+      [Memory]: ${userMemory}
       ${goalInstruction}
       ${contextInstruction}
       
-      【出力ルール】JSONのみ
+      [CRITICAL RULE]: Output JSON ONLY. No markdown. No intro text.
+      JSON Format:
       {
-        "reply": "ユーザーへの言葉",
-        "timer_seconds": 推奨秒数(整数),
-        "score": 0〜100,
-        "is_combo": boolean,
-        "detected_goal": "推測される大目標（維持・更新）。なければnull",
-        "reason": "理由"
+        "reply": "message string",
+        "timer_seconds": 180,
+        "score": 80,
+        "is_combo": true,
+        "detected_goal": "goal string or null",
+        "reason": "reason string"
       }
     `;
 
-    const requestText = action === 'normal' ? `User: ${message}` : `(System Trigger: ${action})`;
+    const requestText = action === 'normal' ? `User: ${message}` : `(System: ${action})`;
 
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\n" + requestText }] }],
-        generationConfig: { response_mime_type: "application/json" }
+        generationConfig: { response_mime_type: "application/json" } // JSONモード強制
       })
     });
 
     const data: any = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    let result = JSON.parse(rawText);
     
-    // フロントエンドに「今回使ったスタイル」を返す（フィードバック用）
-    result.used_style = usedStyle; 
+    // Google APIのエラーチェック
+    if (data.error) {
+      console.error("Gemini API Error:", data.error);
+      return c.json({ reply: `(API Error: ${data.error.message})` });
+    }
+
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    
+    // ★ここが修正点: JSONパースエラー時の救済措置
+    let result;
+    try {
+      result = JSON.parse(rawText);
+    } catch (e) {
+      console.error("JSON Parse Failed, using raw text:", rawText);
+      // JSONじゃなかった場合、生のテキストをreplyとして扱う
+      result = {
+        reply: rawText.replace(/```json|```/g, '').trim(), // コードブロック除去
+        score: 50,
+        is_combo: false,
+        timer_seconds: 0,
+        detected_goal: current_goal
+      };
+    }
+    
+    result.used_style = usedStyle;
     result.is_exploration = isExploration;
 
-    // --- ★ここが追加箇所: 記憶の更新 (バックグラウンド処理) ---
-    if (action === 'normal' || action === 'next') {
+    // 記憶更新 (通常時のみ、エラー無視)
+    if (action === 'normal') {
       c.executionCtx.waitUntil((async () => {
         try {
-          const memoryPrompt = `
-            あなたはユーザーの記憶管理者です。
-            【現在の記憶】: "${userMemory}"
-            【直前のやり取り】: User="${message}" / AI="${result.reply}"
-            
-            指示:
-            会話から「ユーザーの苦手なこと、成功したパターン、生活習慣」等の新しい事実があれば、
-            現在の記憶を更新・追記してください。
-            出力は「更新後の記憶テキスト」のみ。
-          `;
-
-          const memRes = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: memoryPrompt }] }] })
-          });
+          const memBody = { contents: [{ role: "user", parts: [{ text: `Update memory based on: "${message}" -> "${result.reply}". Current: "${userMemory}". Output updated memory text only.` }] }] };
+          const memRes = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(memBody) });
           const memData: any = await memRes.json();
           const newMemory = memData.candidates?.[0]?.content?.parts?.[0]?.text;
-          
-          if (newMemory) {
-            await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMemory, email).run();
-            console.log("Memory Updated:", newMemory);
-          }
-        } catch (err) {
-          console.error("Memory update failed", err);
-        }
+          if (newMemory) await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMemory, email).run();
+        } catch (err) {}
       })());
     }
 
     return c.json(result);
 
   } catch (e: any) {
-    return c.json({ reply: `Error: ${e.message}` })
+    console.error("Server Error:", e);
+    // サーバーエラー時もJSONを返してフロントエンドを落とさない
+    return c.json({ reply: "通信エラーが発生しましたが、大丈夫です。もう一度試してください。", error: e.message });
   }
 })
 
-// --- 3. フィードバック (進化の確定) ---
+// フィードバック
 app.post('/api/feedback', async (c) => {
   const { email, used_style, is_success } = await c.req.json();
   try {
     if (is_success) {
-      // 成功したら、そのスタイルを「最強」として保存 (進化確定)
       await c.env.DB.prepare("UPDATE users SET current_best_style = ?, streak = streak + 1 WHERE email = ?").bind(used_style, email).run();
     }
     const user: any = await c.env.DB.prepare("SELECT streak FROM users WHERE email = ?").bind(email).first();
