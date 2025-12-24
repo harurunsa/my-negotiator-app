@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-// @ts-ignore
-import confetti from 'https://esm.sh/canvas-confetti';
+// インストールしている場合はこちら
+import confetti from 'canvas-confetti';
+// もしインストールが面倒な場合は、上の行を消して下記を使ってください
+// import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
@@ -18,6 +20,7 @@ function App() {
   const timerRef = useRef<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null); 
 
+  // URLからログイン情報を復元
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const email = params.get('email');
@@ -30,10 +33,12 @@ function App() {
     }
   }, []);
 
+  // 自動スクロール
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatLog, loading]);
 
+  // タイマー処理
   useEffect(() => {
     if (timerActive && timeLeft > 0) {
       timerRef.current = window.setTimeout(() => setTimeLeft(prev => prev - 1), 1000);
@@ -47,7 +52,7 @@ function App() {
     setTimerActive(false);
     triggerConfetti(); 
     playNotificationSound();
-    sendMessage(null, 'next');
+    sendMessage(null, 'next'); // 自動で次のタスクへ
   };
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
@@ -110,6 +115,7 @@ function App() {
     updatedLog[index].feedback_done = true;
     setChatLog(updatedLog);
 
+    // AIの進化データを送信
     fetch(`${API_URL}/api/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -131,7 +137,7 @@ function App() {
 
   const triggerConfetti = () => {
     const end = Date.now() + 1000;
-    const colors = ['#00FFC2', '#0099FF', '#FF00CC']; // ネオンカラー
+    const colors = ['#00FFC2', '#0099FF', '#FF00CC'];
     (function frame() {
       confetti({ particleCount: 4, angle: 60, spread: 55, origin: { x: 0 }, colors: colors });
       confetti({ particleCount: 4, angle: 120, spread: 55, origin: { x: 1 }, colors: colors });
@@ -149,7 +155,6 @@ function App() {
       oscillator.type = 'sine';
       oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
       gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
       oscillator.start();
       oscillator.stop(audioCtx.currentTime + 0.5);
     } catch(e) {}
@@ -167,15 +172,15 @@ function App() {
   
   const getProgressColor = () => {
     const ratio = timeLeft / totalTime;
-    if (ratio > 0.5) return "#00FFC2"; // Neon Green
-    if (ratio > 0.2) return "#FFEB3B"; // Yellow
-    return "#FF0055"; // Red
+    if (ratio > 0.5) return "#00FFC2";
+    if (ratio > 0.2) return "#FFEB3B";
+    return "#FF0055";
   };
 
   return (
     <div style={styles.appContainer}>
       
-      {/* Focus Mode Overlay (Timer) */}
+      {/* 没入型タイマー */}
       {timerActive && (
         <div style={styles.timerOverlay}>
           <div style={styles.timerContent}>
@@ -205,7 +210,7 @@ function App() {
         </div>
       )}
 
-      {/* Header */}
+      {/* ヘッダー */}
       <header style={styles.header}>
         <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
           <div style={styles.logoIcon}>⚡</div>
@@ -222,7 +227,7 @@ function App() {
         )}
       </header>
 
-      {/* ★ Premium Landing Page (Login) */}
+      {/* ランディングページ (ログイン前) */}
       {!user ? (
         <div style={styles.landingContainer}>
            <div style={styles.landingContent}>
@@ -235,23 +240,21 @@ function App() {
                脳の「司令塔」を外部化する。<br/>
                ADHDのための、最強のパートナーAI。
              </p>
-             
              <button onClick={handleLogin} className="btn-shine" style={styles.googleBtn}>
                Googleで始める
              </button>
-
              <div style={styles.featureGrid}>
                <div style={styles.featureItem}>🧠 脳内会議の代行</div>
                <div style={styles.featureItem}>🎮 人生をゲーム化</div>
                <div style={styles.featureItem}>💊 デジタル・サプリ</div>
              </div>
            </div>
-           
-           {/* Decorative Background Elements */}
+           {/* 背景装飾 */}
            <div style={styles.bgBlob1}></div>
            <div style={styles.bgBlob2}></div>
         </div>
       ) : (
+        /* チャット画面 (ログイン後) */
         <div style={styles.chatContainer}>
           <div style={styles.chatScrollArea}>
             {chatLog.length === 0 && (
@@ -333,10 +336,9 @@ function App() {
         </div>
       )}
 
-      {/* Global CSS & Animations */}
+      {/* Global CSS */}
       <style>{`
         body { margin: 0; background-color: #F7F9FC; color: #1a1a1a; }
-        
         @keyframes popIn { 0% { opacity: 0; transform: scale(0.9) translateY(10px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
         @keyframes fadeIn { 0% { opacity: 0; } 100% { opacity: 1; } }
         @keyframes pulse { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 255, 194, 0.7); } 70% { transform: scale(1.02); box-shadow: 0 0 0 10px rgba(0, 255, 194, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 255, 194, 0); } }
@@ -348,9 +350,7 @@ function App() {
         .pulse-button { animation: pulse 2s infinite; }
         .pulse-slow { animation: pulseSlow 3s infinite ease-in-out; }
         
-        .btn-shine {
-          position: relative; overflow: hidden;
-        }
+        .btn-shine { position: relative; overflow: hidden; }
         .btn-shine::after {
           content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
           background: linear-gradient(to right, rgba(255,255,255,0) 0%, rgba(255,255,255,0.3) 50%, rgba(255,255,255,0) 100%);
@@ -376,8 +376,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     maxWidth: '600px', margin: '0 auto', height: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden',
     backgroundColor: '#F7F9FC'
   },
-  
-  // Header
   header: {
     position: 'absolute', top: 0, left: 0, right: 0, height: '60px',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -391,24 +389,18 @@ const styles: { [key: string]: React.CSSProperties } = {
   streakBox: { textAlign: 'right' },
   streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
   streakValue: { fontSize: '1.4rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
-
-  // Landing Page (Login)
+  
   landingContainer: { 
     flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center',
     background: '#0F172A', color: '#fff', position: 'relative', overflow: 'hidden'
   },
-  landingContent: {
-    zIndex: 2, padding: '40px', maxWidth: '400px', width: '100%', textAlign: 'left'
-  },
+  landingContent: { zIndex: 2, padding: '40px', maxWidth: '400px', width: '100%', textAlign: 'left' },
   badge: {
     display: 'inline-block', padding: '4px 12px', background: 'rgba(255,255,255,0.1)', 
     borderRadius: '20px', fontSize: '0.75rem', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.2)'
   },
   heroTitle: { fontSize: '3rem', margin: '0 0 20px 0', lineHeight: 1.1, fontWeight: '800', letterSpacing: '-1px' },
-  gradientText: { 
-    background: 'linear-gradient(to right, #00C2FF, #00FFC2)', 
-    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' 
-  },
+  gradientText: { background: 'linear-gradient(to right, #00C2FF, #00FFC2)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' },
   heroSub: { fontSize: '1.1rem', opacity: 0.8, marginBottom: '40px', lineHeight: 1.6, fontWeight: '300' },
   googleBtn: { 
     width: '100%', padding: '18px', borderRadius: '16px', border: 'none',
@@ -420,7 +412,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'rgba(255,255,255,0.05)', padding: '12px 20px', borderRadius: '12px', 
     fontSize: '0.9rem', border: '1px solid rgba(255,255,255,0.05)', backdropFilter: 'blur(5px)'
   },
-  // Bg Blobs
   bgBlob1: {
     position: 'absolute', top: '-20%', right: '-20%', width: '500px', height: '500px',
     background: 'radial-gradient(circle, rgba(0,194,255,0.2) 0%, rgba(0,0,0,0) 70%)',
@@ -431,68 +422,27 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'radial-gradient(circle, rgba(0,255,194,0.15) 0%, rgba(0,0,0,0) 70%)',
     animation: 'float 15s infinite ease-in-out reverse'
   },
-
-  // Chat Area
+  
   chatContainer: { flex: 1, display: 'flex', flexDirection: 'column', paddingTop: '70px' }, 
   chatScrollArea: { flex: 1, overflowY: 'auto', padding: '0 15px 20px 15px', display: 'flex', flexDirection: 'column', gap: '20px' },
   emptyState: { textAlign: 'center', marginTop: '100px', color: '#999', lineHeight: '1.8' },
-
   messageRow: { display: 'flex', width: '100%' },
   systemMessage: { fontSize: '0.75rem', color: '#888', background: '#eef2f6', padding: '6px 14px', borderRadius: '20px', fontWeight: '600' },
-  
-  bubble: {
-    padding: '16px 20px', maxWidth: '85%', lineHeight: '1.6', fontSize: '1rem',
-    position: 'relative'
-  },
+  bubble: { padding: '16px 20px', maxWidth: '85%', lineHeight: '1.6', fontSize: '1rem', position: 'relative' },
   loadingBubble: { padding: '15px', background: '#fff', borderRadius: '24px', alignSelf: 'flex-start', display: 'flex', alignItems: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' },
-
-  actionButtonContainer: {
-    marginTop: '15px', paddingTop: '15px', borderTop: '1px solid rgba(0,0,0,0.05)',
-    display: 'flex', gap: '12px', justifyContent: 'space-between'
-  },
-  actionBtnPrimary: {
-    flex: 1, background: '#1a1a1a', color: '#fff', border: 'none', padding: '12px 0',
-    borderRadius: '12px', fontWeight: '700', fontSize: '0.9rem', cursor: 'pointer',
-    boxShadow: '0 4px 15px rgba(0,0,0,0.2)'
-  },
-  actionBtnSecondary: {
-    flex: 0.4, background: '#F1F5F9', color: '#64748B', border: 'none', padding: '12px 0',
-    borderRadius: '12px', fontWeight: '600', fontSize: '0.85rem', cursor: 'pointer'
-  },
-
-  // Input
-  inputArea: {
-    padding: '15px', background: '#fff', 
-    display: 'flex', gap: '12px', alignItems: 'center',
-    paddingBottom: 'max(15px, env(safe-area-inset-bottom))',
-    boxShadow: '0 -5px 20px rgba(0,0,0,0.03)'
-  },
-  inputField: {
-    flex: 1, padding: '16px 20px', borderRadius: '25px', border: 'none',
-    fontSize: '1rem', outline: 'none', background: '#F1F5F9', color: '#1a1a1a'
-  },
-  sendBtn: {
-    width: '50px', height: '50px', borderRadius: '50%', background: '#3A86FF', color: '#fff',
-    border: 'none', fontSize: '1.4rem', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center',
-    boxShadow: '0 4px 12px rgba(58, 134, 255, 0.3)'
-  },
-
-  // Focus Mode Overlay
-  timerOverlay: {
-    position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
-    background: 'rgba(10, 10, 15, 0.96)', zIndex: 100,
-    display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(10px)'
-  },
+  actionButtonContainer: { marginTop: '15px', paddingTop: '15px', borderTop: '1px solid rgba(0,0,0,0.05)', display: 'flex', gap: '12px', justifyContent: 'space-between' },
+  actionBtnPrimary: { flex: 1, background: '#1a1a1a', color: '#fff', border: 'none', padding: '12px 0', borderRadius: '12px', fontWeight: '700', fontSize: '0.9rem', cursor: 'pointer', boxShadow: '0 4px 15px rgba(0,0,0,0.2)' },
+  actionBtnSecondary: { flex: 0.4, background: '#F1F5F9', color: '#64748B', border: 'none', padding: '12px 0', borderRadius: '12px', fontWeight: '600', fontSize: '0.85rem', cursor: 'pointer' },
+  inputArea: { padding: '15px', background: '#fff', display: 'flex', gap: '12px', alignItems: 'center', paddingBottom: 'max(15px, env(safe-area-inset-bottom))', boxShadow: '0 -5px 20px rgba(0,0,0,0.03)' },
+  inputField: { flex: 1, padding: '16px 20px', borderRadius: '25px', border: 'none', fontSize: '1rem', outline: 'none', background: '#F1F5F9', color: '#1a1a1a' },
+  sendBtn: { width: '50px', height: '50px', borderRadius: '50%', background: '#3A86FF', color: '#fff', border: 'none', fontSize: '1.4rem', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 4px 12px rgba(58, 134, 255, 0.3)' },
+  timerOverlay: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(10, 10, 15, 0.96)', zIndex: 100, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(10px)' },
   timerContent: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' },
   timerCircleWrapper: { position: 'relative', width: '280px', height: '280px', display: 'flex', justifyContent: 'center', alignItems: 'center' },
   timerTextContainer: { position: 'absolute', textAlign: 'center', color: '#fff' },
   timerNumbers: { fontSize: '4rem', fontWeight: '700', fontFamily: 'monospace', letterSpacing: '-2px', textShadow: '0 0 30px rgba(0,255,194,0.3)' },
   timerLabel: { fontSize: '1rem', color: '#888', marginTop: '5px', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: '600' },
-  timerCompleteBtn: {
-    marginTop: '60px', background: '#00FFC2', border: 'none', color: '#000',
-    padding: '16px 50px', borderRadius: '50px', fontSize: '1.2rem', fontWeight: '800',
-    cursor: 'pointer', boxShadow: '0 0 30px rgba(0, 255, 194, 0.4)', textTransform: 'uppercase', letterSpacing: '1px'
-  }
+  timerCompleteBtn: { marginTop: '60px', background: '#00FFC2', border: 'none', color: '#000', padding: '16px 50px', borderRadius: '50px', fontSize: '1.2rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 0 30px rgba(0, 255, 194, 0.4)', textTransform: 'uppercase', letterSpacing: '1px' }
 };
 
 export default App
