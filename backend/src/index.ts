@@ -11,7 +11,6 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
-// --- 言語別の定数定義 ---
 const MESSAGES = {
   ja: {
     retry_instruction: "【緊急: ユーザー拒絶】直前の提案は却下されました。即座に謝罪し、タスクを物理的最小単位（指一本動かすだけ等）に分解してください。精神論は禁止。",
@@ -29,13 +28,16 @@ const MESSAGES = {
   }
 };
 
-// --- ヘルパー関数: JSONのお掃除 ---
-function cleanJson(text: string): string {
-  // Markdownのコードブロック記号 (```json ... ```) を削除
-  return text.replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
+// --- ★最強のJSON抽出関数 ---
+function extractJson(text: string): string {
+  // 最初の '{' から 最後の '}' までを切り抜く
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1) return "{}"; // 見つからなければ空JSON
+  return text.substring(start, end + 1);
 }
 
-// --- 認証周り ---
+// --- 認証周り (変更なし) ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -75,12 +77,12 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- AIチャット ---
+// --- AIチャット (リトライ機能付き) ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
-    const t = (MESSAGES as any)[lang] || MESSAGES.ja; 
+    const t = (MESSAGES as any)[lang] || MESSAGES.ja;
     
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     let stylePrompt = user.current_best_style || (lang === 'en' ? "Supportive and punchy partner" : "優しく励ますパートナー");
@@ -89,7 +91,6 @@ app.post('/api/chat', async (c) => {
     let contextInstruction = "";
     let isExploration = false;
 
-    // ゴール指示
     const goalInstruction = current_goal ? t.goal_instruction(current_goal) : t.goal_default;
 
     if (action === 'retry') {
@@ -109,7 +110,6 @@ app.post('/api/chat', async (c) => {
         const mutationPrompt = lang === 'en' 
           ? `Current style: "${stylePrompt}". Create a slight variation. Output description only.`
           : `現在の接客スタイル: "${stylePrompt}"。これのバリエーションを1つ作成せよ。出力は説明文のみ。`;
-          
         const mRes = await fetch(mutationUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -132,7 +132,7 @@ app.post('/api/chat', async (c) => {
       ${goalInstruction}
       ${contextInstruction}
       
-      [OUTPUT RULES]: Output JSON ONLY. No markdown formatting.
+      [OUTPUT RULES]: Output JSON ONLY.
       {
         "reply": "Response to user",
         "timer_seconds": Integer,
@@ -145,41 +145,61 @@ app.post('/api/chat', async (c) => {
 
     const requestText = action === 'normal' ? `User: ${message}` : `(System Trigger: ${action})`;
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\n" + requestText }] }],
-        generationConfig: { response_mime_type: "application/json" }
-      })
-    });
+    // --- ★ここから自動リトライロジック ---
+    let result = null;
+    let retryCount = 0;
+    const maxRetries = 3; // 最大3回までやり直す
 
-    const data: any = await response.json();
-    
-    // ★修正: JSONパースを頑丈にする
-    let result;
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    
-    try {
-      const cleanedText = cleanJson(rawText);
-      result = JSON.parse(cleanedText);
-    } catch (parseError) {
-      console.error("JSON Parse Error:", rawText);
-      // パース失敗時のフォールバック (アプリを止めない)
+    while (retryCount < maxRetries) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\n" + requestText }] }],
+            generationConfig: { response_mime_type: "application/json" }
+          })
+        });
+
+        const data: any = await response.json();
+        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        
+        // JSON抽出を試みる
+        const cleanedText = extractJson(rawText);
+        const parsed = JSON.parse(cleanedText);
+
+        // 中身がちゃんとあるか確認
+        if (parsed.reply && parsed.reply.trim() !== "") {
+          result = parsed;
+          break; // 成功！ループを抜ける
+        } else {
+          throw new Error("Empty reply"); // 中身が空ならやり直し
+        }
+      } catch (e) {
+        console.log(`Retry ${retryCount + 1}/${maxRetries} failed:`, e);
+        retryCount++;
+      }
+    }
+
+    // --- 全リトライ失敗時の救済措置 ---
+    if (!result) {
       result = {
-        reply: lang === 'en' ? "Sorry, I'm thinking too hard! Let's just do it." : "すみません、少し考えすぎました！とにかくやりましょう。",
-        timer_seconds: 180,
-        score: 50,
+        reply: lang === 'en' 
+          ? "Sorry, connection glitch! Let's just focus on the task: Take one deep breath." 
+          : "通信が少し不安定です！でも大丈夫、まずは深呼吸を一つしましょう。",
+        timer_seconds: 60,
+        score: 10,
         is_combo: false,
         detected_goal: current_goal
       };
     }
-    
+    // ------------------------------------
+
     result.used_style = usedStyle; 
     result.is_exploration = isExploration;
 
-    // 記憶更新
-    if (action === 'normal' || action === 'next') {
+    // 記憶更新 (成功時のみ)
+    if ((action === 'normal' || action === 'next') && result.reply) {
       c.executionCtx.waitUntil((async () => {
         try {
           const memoryPrompt = lang === 'en'
@@ -204,7 +224,6 @@ app.post('/api/chat', async (c) => {
     return c.json(result);
 
   } catch (e: any) {
-    // どんなエラーでもJSONで返して、フロントエンドをフリーズさせない
     return c.json({ 
       reply: `System Error: ${e.message}`, 
       timer_seconds: 0 
