@@ -1,16 +1,15 @@
 DROP TABLE IF EXISTS users;
-DROP TABLE IF EXISTS bandit_stats; -- 不要になったので削除
 
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE,
   name TEXT,
-  streak INTEGER DEFAULT 0,
-  is_pro INTEGER DEFAULT 0,
+  streak INTEGER DEFAULT 0,       -- コンボ数
+  is_pro INTEGER DEFAULT 0,       -- 課金フラグ (0:無料, 1:有料)
   
-  -- ★ここが進化
-  memory TEXT DEFAULT '', -- ユーザーに関する事実（「レポートが苦手」など）
-  current_best_style TEXT DEFAULT '優しく、かつ論理的にマイクロステップを提案するスタイル', -- 現在の最強プロンプト
+  -- ★ここがAIの「脳みそ」になります
+  memory TEXT DEFAULT '',         -- 長期記憶（ユーザーの癖や苦手なこと）
+  current_best_style TEXT DEFAULT 'タスクを極限まで小さく分解し、優しく励ますパートナー', -- 現在の最適プロンプト
   
   created_at INTEGER
 );
