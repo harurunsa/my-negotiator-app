@@ -28,16 +28,14 @@ const MESSAGES = {
   }
 };
 
-// --- ★最強のJSON抽出関数 ---
 function extractJson(text: string): string {
-  // 最初の '{' から 最後の '}' までを切り抜く
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1) return "{}"; // 見つからなければ空JSON
+  if (start === -1 || end === -1) return "{}";
   return text.substring(start, end + 1);
 }
 
-// --- 認証周り (変更なし) ---
+// --- 認証周り ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -77,13 +75,18 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- AIチャット (リトライ機能付き) ---
+// --- AIチャット (Liteモデル採用) ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     const t = (MESSAGES as any)[lang] || MESSAGES.ja;
     
+    // ★モデル変更: コスパ最強の Lite モデルを指定
+    // もし "2.0-flash-lite" がまだ地域制限等で動かない場合は "gemini-1.5-flash-8b" にしてください
+    const modelName = 'gemini-2.0-flash-lite-preview-02-05'; 
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     let stylePrompt = user.current_best_style || (lang === 'en' ? "Supportive and punchy partner" : "優しく励ますパートナー");
     const userMemory = user.memory || "";
@@ -102,15 +105,14 @@ app.post('/api/chat', async (c) => {
       isExploration = Math.random() < 0.2;
     }
 
-    // 変異ロジック
+    // 変異ロジック (ここもLiteで行うことで高速化)
     let usedStyle = stylePrompt;
     if (isExploration && action !== 'retry') {
-      const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
       try {
         const mutationPrompt = lang === 'en' 
           ? `Current style: "${stylePrompt}". Create a slight variation. Output description only.`
           : `現在の接客スタイル: "${stylePrompt}"。これのバリエーションを1つ作成せよ。出力は説明文のみ。`;
-        const mRes = await fetch(mutationUrl, {
+        const mRes = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: mutationPrompt }] }] })
@@ -121,8 +123,6 @@ app.post('/api/chat', async (c) => {
       } catch (e) {}
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
-    
     const systemInstruction = `
       ${t.ai_persona}
       [Language]: Reply in ${lang === 'en' ? 'English' : 'Japanese'}.
@@ -145,10 +145,10 @@ app.post('/api/chat', async (c) => {
 
     const requestText = action === 'normal' ? `User: ${message}` : `(System Trigger: ${action})`;
 
-    // --- ★ここから自動リトライロジック ---
+    // 自動リトライロジック
     let result = null;
     let retryCount = 0;
-    const maxRetries = 3; // 最大3回までやり直す
+    const maxRetries = 3; 
 
     while (retryCount < maxRetries) {
       try {
@@ -162,18 +162,21 @@ app.post('/api/chat', async (c) => {
         });
 
         const data: any = await response.json();
-        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         
-        // JSON抽出を試みる
+        // エラーハンドリング強化
+        if (data.error) {
+           throw new Error(`Gemini API Error: ${data.error.message}`);
+        }
+
+        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         const cleanedText = extractJson(rawText);
         const parsed = JSON.parse(cleanedText);
 
-        // 中身がちゃんとあるか確認
         if (parsed.reply && parsed.reply.trim() !== "") {
           result = parsed;
-          break; // 成功！ループを抜ける
+          break;
         } else {
-          throw new Error("Empty reply"); // 中身が空ならやり直し
+          throw new Error("Empty reply");
         }
       } catch (e) {
         console.log(`Retry ${retryCount + 1}/${maxRetries} failed:`, e);
@@ -181,11 +184,10 @@ app.post('/api/chat', async (c) => {
       }
     }
 
-    // --- 全リトライ失敗時の救済措置 ---
     if (!result) {
       result = {
         reply: lang === 'en' 
-          ? "Sorry, connection glitch! Let's just focus on the task: Take one deep breath." 
+          ? "Connection glitch! Let's just focus: Take one deep breath." 
           : "通信が少し不安定です！でも大丈夫、まずは深呼吸を一つしましょう。",
         timer_seconds: 60,
         score: 10,
@@ -193,12 +195,11 @@ app.post('/api/chat', async (c) => {
         detected_goal: current_goal
       };
     }
-    // ------------------------------------
 
     result.used_style = usedStyle; 
     result.is_exploration = isExploration;
 
-    // 記憶更新 (成功時のみ)
+    // 記憶更新 (Liteモデルで十分)
     if ((action === 'normal' || action === 'next') && result.reply) {
       c.executionCtx.waitUntil((async () => {
         try {
@@ -231,7 +232,6 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// フィードバック
 app.post('/api/feedback', async (c) => {
   const { email, used_style, is_success } = await c.req.json();
   try {
