@@ -11,7 +11,7 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
-// --- 認証周り ---
+// --- 1. Google認証 ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -37,9 +37,10 @@ app.get('/auth/callback', async (c) => {
     })
     const userData: any = await userResponse.json()
 
+    // ユーザー初期化（既存ユーザーなら名前だけ更新、記憶やスタイルは維持）
     await c.env.DB.prepare(
-      `INSERT INTO users (id, email, name, created_at, current_best_style) 
-       VALUES (?, ?, ?, ?, 'タスクを極限まで小さく分解し、優しく励ますパートナー')
+      `INSERT INTO users (id, email, name, created_at) 
+       VALUES (?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name=excluded.name`
     ).bind(userData.id, userData.email, userData.name, Date.now()).run();
 
@@ -51,55 +52,73 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- ★修正: 差別化のための「超・適応型」ロジック ---
+// --- 2. メインチャット機能（進化＆記憶） ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     
+    // ユーザー情報のロード
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
-    let stylePrompt = user.current_best_style || "優しく励ます";
-    const userMemory = user.memory || "特になし";
+    let stylePrompt = user.current_best_style || "優しく励ます"; // 現在の最適スタイル
+    const userMemory = user.memory || "特になし"; // 長期記憶
 
     let contextInstruction = "";
-    
-    // ゴールの維持（ここも強化）
+    let isExploration = false; // 今回「実験（変異）」をするかどうか
+
+    // ゴール維持指示
     const goalInstruction = current_goal 
       ? `【絶対目標】: "${current_goal}"\n(※全ての提案はこの達成に向かうこと。関係ない話題へ逸れるのは禁止)`
       : `会話から「ユーザーが今達成したいゴール」を推測し、そこにロックオンしてください。`;
 
+    // アクション分岐
     if (action === 'retry') {
-      // ★ここが差別化ポイント: 「無理」と言われたら劇的にハードルを下げる
+      // ★「無理」と言われた時: 徹底的にハードルを下げる
       contextInstruction = `
-        【緊急事態: ユーザーの拒絶】
-        直前の提案 "${prev_context}" は「難しすぎる/やりたくない」と却下されました。
-        
-        ★絶対的な指示:
-        1. 即座に謝罪し、「もっともっと簡単で、笑っちゃうようなこと」を提案してください。
-        2. 「タスクの粒度」を現在の1/100にしてください。
-        3. 精神論（がんばろう等）は禁止。物理的な最小動作のみを指示する。
-        例: 「掃除」が無理 → 「ゴミ袋を1枚取るだけ」
-        例: 「PC作業」が無理 → 「PCの前に座って深呼吸するだけ」
+        【緊急: ユーザー拒絶】
+        直前の提案 "${prev_context}" は却下されました。
+        指示:
+        1. 即座に謝罪してください。
+        2. タスクを「物理的に可能な最小単位（指を動かすだけ等）」まで分解してください。
+        3. 精神論禁止。物理的なイージーさを提示すること。
       `;
     } else if (action === 'next') {
+      // ★コンボ中: 勢いを殺さない
+      // ここで少し「実験（口調の変化）」を混ぜる確率を上げる
+      isExploration = Math.random() < 0.3; 
       contextInstruction = `
-        【コンボ継続中！ドーパミン放出中】
-        ユーザーはノッています。
+        【コンボ継続中！】
         指示:
-        1. 短く、テンション高く褒める（絵文字付き）。
-        2. 間髪入れずに「次のステップ」を出す。思考の隙間を与えない。
-        3. 大目標 "${current_goal}" に向かって一直線に進める。
+        1. 短くテンション高く褒める。
+        2. 間髪入れずに次のステップを出す。
       `;
+    } else {
+      // 通常会話: 20%で変異
+      isExploration = Math.random() < 0.2;
     }
 
-    // AIリクエスト生成
+    // ★進化的アルゴリズム: スタイルの突然変異
+    let usedStyle = stylePrompt;
+    if (isExploration && action !== 'retry') {
+      const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+      try {
+        const mRes = await fetch(mutationUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: `現在の接客スタイル: "${stylePrompt}"\nこれのバリエーション（少し厳しく/もっとフランクになど）を1つ作成せよ。出力は説明文のみ。` }] }] })
+        });
+        const mData: any = await mRes.json();
+        const mutated = mData.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (mutated) usedStyle = mutated.trim(); // 変異スタイル採用
+      } catch (e) {}
+    }
+
+    // Geminiへのリクエスト
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
     
     const systemInstruction = `
-      あなたはADHDの脳特性をハックする「実行機能拡張AI」です。
-      従来のToDoアプリとは違い、あなたは「感情」と「行動の着火」に特化しています。
-
-      【現在のペルソナ】: "${stylePrompt}"
+      あなたはADHDの脳特性をハックする実行機能拡張AIです。
+      【現在のペルソナ】: "${usedStyle}"
       【ユーザーの記憶】: ${userMemory}
       
       ${goalInstruction}
@@ -107,7 +126,7 @@ app.post('/api/chat', async (c) => {
       
       【出力ルール】JSONのみ
       {
-        "reply": "ユーザーへの言葉（マークダウン対応）",
+        "reply": "ユーザーへの言葉",
         "timer_seconds": 推奨秒数(整数),
         "score": 0〜100,
         "is_combo": boolean,
@@ -131,10 +150,41 @@ app.post('/api/chat', async (c) => {
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     let result = JSON.parse(rawText);
     
-    result.used_style = stylePrompt;
+    // フロントエンドに「今回使ったスタイル」を返す（フィードバック用）
+    result.used_style = usedStyle; 
+    result.is_exploration = isExploration;
 
-    if (action === 'normal') {
-      c.executionCtx.waitUntil((async () => {})());
+    // --- ★ここが追加箇所: 記憶の更新 (バックグラウンド処理) ---
+    if (action === 'normal' || action === 'next') {
+      c.executionCtx.waitUntil((async () => {
+        try {
+          const memoryPrompt = `
+            あなたはユーザーの記憶管理者です。
+            【現在の記憶】: "${userMemory}"
+            【直前のやり取り】: User="${message}" / AI="${result.reply}"
+            
+            指示:
+            会話から「ユーザーの苦手なこと、成功したパターン、生活習慣」等の新しい事実があれば、
+            現在の記憶を更新・追記してください。
+            出力は「更新後の記憶テキスト」のみ。
+          `;
+
+          const memRes = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: memoryPrompt }] }] })
+          });
+          const memData: any = await memRes.json();
+          const newMemory = memData.candidates?.[0]?.content?.parts?.[0]?.text;
+          
+          if (newMemory) {
+            await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMemory, email).run();
+            console.log("Memory Updated:", newMemory);
+          }
+        } catch (err) {
+          console.error("Memory update failed", err);
+        }
+      })());
     }
 
     return c.json(result);
@@ -144,11 +194,12 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// フィードバック
+// --- 3. フィードバック (進化の確定) ---
 app.post('/api/feedback', async (c) => {
   const { email, used_style, is_success } = await c.req.json();
   try {
     if (is_success) {
+      // 成功したら、そのスタイルを「最強」として保存 (進化確定)
       await c.env.DB.prepare("UPDATE users SET current_best_style = ?, streak = streak + 1 WHERE email = ?").bind(used_style, email).run();
     }
     const user: any = await c.env.DB.prepare("SELECT streak FROM users WHERE email = ?").bind(email).first();
