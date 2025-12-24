@@ -1,18 +1,64 @@
 import { useState, useEffect, useRef } from 'react'
-// インストールしている場合はこちら
-import confetti from 'canvas-confetti';
-// もしインストールが面倒な場合は、上の行を消して下記を使ってください
-// import confetti from 'https://esm.sh/canvas-confetti';
+// @ts-ignore
+import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
+
+// --- 翻訳辞書 ---
+const TRANSLATIONS = {
+  ja: {
+    logo: "Negotiator",
+    goal_prefix: "Running:",
+    streak_label: "STREAK",
+    login_badge: "Beta v1.0",
+    hero_title: "Hack Your\nExecutive Function.",
+    hero_sub: "脳の「司令塔」を外部化する。\nADHDのための、最強のパートナーAI。",
+    btn_login: "Googleで始める",
+    features: ["🧠 脳内会議の代行", "🎮 人生をゲーム化", "💊 デジタル・サプリ"],
+    empty_icon: "🧠",
+    empty_text: "「部屋が汚い...」「メール返したくない...」\nその思考、私に預けてください。",
+    btn_start: "🔥 やる (START)",
+    btn_impossible: "😰 無理...",
+    placeholder: "思考を吐き出す...",
+    timer_focus: "FOCUS",
+    timer_complete: "Mission Complete",
+    system_retry: "😰 ハードルを極限まで下げています...",
+    system_next: "🚀 ナイス！次のステップへ！"
+  },
+  en: {
+    logo: "Negotiator",
+    goal_prefix: "Goal:",
+    streak_label: "STREAK",
+    login_badge: "Beta v1.0",
+    hero_title: "Hack Your\nExecutive Function.",
+    hero_sub: "Externalize your brain's command center.\nThe ultimate AI partner for ADHD minds.",
+    btn_login: "Start with Google",
+    features: ["🧠 Outsource Overthinking", "🎮 Gamify Your Life", "💊 Digital Supplement"],
+    empty_icon: "🧠",
+    empty_text: "\"My room is a mess...\" \"I can't reply...\"\nOffload those thoughts to me.",
+    btn_start: "🔥 Let's Do It",
+    btn_impossible: "😰 No way...",
+    placeholder: "Dump your thoughts here...",
+    timer_focus: "FOCUS",
+    timer_complete: "Mission Complete",
+    system_retry: "😰 Lowering hurdles to the limit...",
+    system_next: "🚀 Nice! Next step!"
+  }
+};
 
 function App() {
   const [user, setUser] = useState<{email: string, name: string, streak: number, is_pro: number} | null>(null);
   const [input, setInput] = useState("");
   const [chatLog, setChatLog] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  
   const [currentGoal, setCurrentGoal] = useState<string>("");
+  
+  // ★言語設定 (デフォルトはブラウザの設定を見る)
+  const [lang, setLang] = useState<'ja' | 'en'>(
+    navigator.language.startsWith('en') ? 'en' : 'ja'
+  );
+  const t = TRANSLATIONS[lang]; // 現在の辞書
+
   const [timerActive, setTimerActive] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [totalTime, setTotalTime] = useState(0);
@@ -20,7 +66,6 @@ function App() {
   const timerRef = useRef<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null); 
 
-  // URLからログイン情報を復元
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const email = params.get('email');
@@ -33,12 +78,10 @@ function App() {
     }
   }, []);
 
-  // 自動スクロール
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatLog, loading]);
 
-  // タイマー処理
   useEffect(() => {
     if (timerActive && timeLeft > 0) {
       timerRef.current = window.setTimeout(() => setTimeLeft(prev => prev - 1), 1000);
@@ -48,11 +91,15 @@ function App() {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [timerActive, timeLeft]);
 
+  const toggleLang = () => {
+    setLang(prev => prev === 'ja' ? 'en' : 'ja');
+  };
+
   const handleTimerComplete = () => {
     setTimerActive(false);
     triggerConfetti(); 
     playNotificationSound();
-    sendMessage(null, 'next'); // 自動で次のタスクへ
+    sendMessage(null, 'next');
   };
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
@@ -66,9 +113,9 @@ function App() {
     if (action === 'normal' && manualMessage) {
       newLog.push({ role: "user", text: manualMessage });
     } else if (action === 'retry') {
-      newLog.push({ role: "system", text: "😰 ハードルを極限まで下げています..." });
+      newLog.push({ role: "system", text: t.system_retry });
     } else if (action === 'next') {
-      newLog.push({ role: "system", text: "🚀 ナイス！次のステップへ！" });
+      newLog.push({ role: "system", text: t.system_next });
     }
     
     setChatLog(newLog);
@@ -86,7 +133,8 @@ function App() {
           email: user?.email, 
           action, 
           prev_context: lastAiMsg,
-          current_goal: currentGoal
+          current_goal: currentGoal,
+          lang // ★言語設定を送る
         }),
       });
       const data = await res.json();
@@ -115,7 +163,6 @@ function App() {
     updatedLog[index].feedback_done = true;
     setChatLog(updatedLog);
 
-    // AIの進化データを送信
     fetch(`${API_URL}/api/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -126,9 +173,9 @@ function App() {
 
     if (is_success) {
       triggerConfetti();
-      const t = suggestedTimer || 180;
-      setTotalTime(t);
-      setTimeLeft(t);
+      const t_sec = suggestedTimer || 180;
+      setTotalTime(t_sec);
+      setTimeLeft(t_sec);
       setTimerActive(true);
     } else {
       sendMessage(null, 'retry');
@@ -180,7 +227,6 @@ function App() {
   return (
     <div style={styles.appContainer}>
       
-      {/* 没入型タイマー */}
       {timerActive && (
         <div style={styles.timerOverlay}>
           <div style={styles.timerContent}>
@@ -200,67 +246,62 @@ function App() {
               </svg>
               <div style={styles.timerTextContainer}>
                 <div style={styles.timerNumbers}>{formatTime(timeLeft)}</div>
-                <div style={styles.timerLabel}>{currentGoal || "FOCUS"}</div>
+                <div style={styles.timerLabel}>{currentGoal || t.timer_focus}</div>
               </div>
             </div>
             <button onClick={handleTimerComplete} className="btn-shine" style={styles.timerCompleteBtn}>
-              Mission Complete
+              {t.timer_complete}
             </button>
           </div>
         </div>
       )}
 
-      {/* ヘッダー */}
       <header style={styles.header}>
         <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
           <div style={styles.logoIcon}>⚡</div>
           <div>
-            <h1 style={styles.logoText}>Negotiator</h1>
-            {currentGoal && <div className="fade-in" style={styles.goalText}>Running: {currentGoal}</div>}
+            <h1 style={styles.logoText}>{t.logo}</h1>
+            {currentGoal && <div className="fade-in" style={styles.goalText}>{t.goal_prefix} {currentGoal}</div>}
           </div>
         </div>
-        {user && (
-           <div style={styles.streakBox}>
-             <span style={styles.streakLabel}>STREAK</span>
-             <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
-           </div>
-        )}
+        
+        {/* 言語切り替えボタン & ストリーク */}
+        <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
+          <button onClick={toggleLang} style={styles.langBtn}>
+            {lang === 'ja' ? 'EN' : 'JP'}
+          </button>
+          {user && (
+             <div style={styles.streakBox}>
+               <span style={styles.streakLabel}>{t.streak_label}</span>
+               <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
+             </div>
+          )}
+        </div>
       </header>
 
-      {/* ランディングページ (ログイン前) */}
       {!user ? (
         <div style={styles.landingContainer}>
            <div style={styles.landingContent}>
-             <div style={styles.badge}>Beta v1.0</div>
-             <h1 style={styles.heroTitle}>
-               Hack Your <br/>
-               <span style={styles.gradientText}>Executive Function.</span>
-             </h1>
-             <p style={styles.heroSub}>
-               脳の「司令塔」を外部化する。<br/>
-               ADHDのための、最強のパートナーAI。
-             </p>
+             <div style={styles.badge}>{t.login_badge}</div>
+             <h1 style={styles.heroTitle} dangerouslySetInnerHTML={{__html: t.hero_title.replace('\n', '<br/>')}}></h1>
+             <p style={styles.heroSub} dangerouslySetInnerHTML={{__html: t.hero_sub.replace('\n', '<br/>')}}></p>
              <button onClick={handleLogin} className="btn-shine" style={styles.googleBtn}>
-               Googleで始める
+               {t.btn_login}
              </button>
              <div style={styles.featureGrid}>
-               <div style={styles.featureItem}>🧠 脳内会議の代行</div>
-               <div style={styles.featureItem}>🎮 人生をゲーム化</div>
-               <div style={styles.featureItem}>💊 デジタル・サプリ</div>
+               {t.features.map((f:any, i:number) => <div key={i} style={styles.featureItem}>{f}</div>)}
              </div>
            </div>
-           {/* 背景装飾 */}
            <div style={styles.bgBlob1}></div>
            <div style={styles.bgBlob2}></div>
         </div>
       ) : (
-        /* チャット画面 (ログイン後) */
         <div style={styles.chatContainer}>
           <div style={styles.chatScrollArea}>
             {chatLog.length === 0 && (
               <div className="fade-in" style={styles.emptyState}>
-                <div style={{fontSize: '3rem', marginBottom: '20px'}}>🧠</div>
-                <p>「部屋が汚い...」「メール返したくない...」<br/>その思考、私に預けてください。</p>
+                <div style={{fontSize: '3rem', marginBottom: '20px'}}>{t.empty_icon}</div>
+                <p style={{whiteSpace:'pre-line'}}>{t.empty_text}</p>
               </div>
             )}
             
@@ -291,13 +332,13 @@ function App() {
                           className="pulse-button"
                           style={styles.actionBtnPrimary}
                         >
-                          🔥 やる (START)
+                          {t.btn_start}
                         </button>
                         <button 
                           onClick={() => handleFeedback(i, log.used_style, false, 0)} 
                           style={styles.actionBtnSecondary}
                         >
-                          😰 無理...
+                          {t.btn_impossible}
                         </button>
                       </div>
                     )}
@@ -321,7 +362,7 @@ function App() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && sendMessage(input, 'normal')}
-              placeholder="思考を吐き出す..."
+              placeholder={t.placeholder}
               disabled={timerActive}
               style={styles.inputField}
             />
@@ -386,6 +427,11 @@ const styles: { [key: string]: React.CSSProperties } = {
   logoIcon: { fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' },
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
   goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  
+  langBtn: {
+    padding: '5px 10px', fontSize: '0.7rem', borderRadius: '15px', border: '1px solid #ddd',
+    background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555'
+  },
   streakBox: { textAlign: 'right' },
   streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
   streakValue: { fontSize: '1.4rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
@@ -400,7 +446,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '20px', fontSize: '0.75rem', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.2)'
   },
   heroTitle: { fontSize: '3rem', margin: '0 0 20px 0', lineHeight: 1.1, fontWeight: '800', letterSpacing: '-1px' },
-  gradientText: { background: 'linear-gradient(to right, #00C2FF, #00FFC2)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' },
   heroSub: { fontSize: '1.1rem', opacity: 0.8, marginBottom: '40px', lineHeight: 1.6, fontWeight: '300' },
   googleBtn: { 
     width: '100%', padding: '18px', borderRadius: '16px', border: 'none',
