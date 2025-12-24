@@ -11,7 +11,7 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
-// --- 認証周り (変更なし) ---
+// --- 認証周り ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -51,10 +51,9 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- ★修正: 文脈維持ロジック ---
+// --- ★修正: 差別化のための「超・適応型」ロジック ---
 app.post('/api/chat', async (c) => {
   try {
-    // current_goal を受け取るように追加
     const { message, email, action, prev_context, current_goal } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     
@@ -63,74 +62,61 @@ app.post('/api/chat', async (c) => {
     const userMemory = user.memory || "特になし";
 
     let contextInstruction = "";
-    let isExploration = false;
-
-    // ★重要: ゴールの維持
-    // ゴールが指定されている場合は、そこから逸れないように強く指示する
+    
+    // ゴールの維持（ここも強化）
     const goalInstruction = current_goal 
-      ? `【現在の大目標】: "${current_goal}"\n必ずこの目標の達成に向かって、論理的に繋がりのある次のステップを提案してください。関係のないタスク（例: 片付け中にPC作業など）は絶対禁止です。`
-      : `会話からユーザーが達成したい「大目標（例: 部屋の掃除、レポート作成）」を推測し、それに向かって誘導してください。`;
+      ? `【絶対目標】: "${current_goal}"\n(※全ての提案はこの達成に向かうこと。関係ない話題へ逸れるのは禁止)`
+      : `会話から「ユーザーが今達成したいゴール」を推測し、そこにロックオンしてください。`;
 
     if (action === 'retry') {
+      // ★ここが差別化ポイント: 「無理」と言われたら劇的にハードルを下げる
       contextInstruction = `
-        【状況: 拒絶】
-        提案 "${prev_context}" は却下されました。
-        指示:
-        1. 謝罪し、タスクをさらに細分化してください。
-        2. ${current_goal ? '大目標を見失わず、' : ''}ハードルを下げてください。
+        【緊急事態: ユーザーの拒絶】
+        直前の提案 "${prev_context}" は「難しすぎる/やりたくない」と却下されました。
+        
+        ★絶対的な指示:
+        1. 即座に謝罪し、「もっともっと簡単で、笑っちゃうようなこと」を提案してください。
+        2. 「タスクの粒度」を現在の1/100にしてください。
+        3. 精神論（がんばろう等）は禁止。物理的な最小動作のみを指示する。
+        例: 「掃除」が無理 → 「ゴミ袋を1枚取るだけ」
+        例: 「PC作業」が無理 → 「PCの前に座って深呼吸するだけ」
       `;
     } else if (action === 'next') {
-      isExploration = Math.random() < 0.2; 
       contextInstruction = `
-        【状況: コンボ継続中！】
-        直前のステップ完了。ユーザーは集中しています。
+        【コンボ継続中！ドーパミン放出中】
+        ユーザーはノッています。
         指示:
-        1. 短く褒める。
-        2. **${goalInstruction}**
-        3. 勢いを止めない。
+        1. 短く、テンション高く褒める（絵文字付き）。
+        2. 間髪入れずに「次のステップ」を出す。思考の隙間を与えない。
+        3. 大目標 "${current_goal}" に向かって一直線に進める。
       `;
-    } else {
-      isExploration = Math.random() < 0.2;
     }
 
-    // 探索（変異）ロジック
-    let usedStyle = stylePrompt;
-    if (isExploration && action !== 'retry') {
-      const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
-      try {
-        const mRes = await fetch(mutationUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: `現在のスタイル: "${stylePrompt}"\nこれを少しだけ変更したスタイル説明文を作成せよ。` }] }] })
-        });
-        const mData: any = await mRes.json();
-        const mutated = mData.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (mutated) usedStyle = mutated.trim();
-      } catch (e) {}
-    }
-
+    // AIリクエスト生成
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
     
     const systemInstruction = `
-      あなたはADHDサポートAIです。
-      【スタイル】: "${usedStyle}"
-      【記憶】: ${userMemory}
+      あなたはADHDの脳特性をハックする「実行機能拡張AI」です。
+      従来のToDoアプリとは違い、あなたは「感情」と「行動の着火」に特化しています。
+
+      【現在のペルソナ】: "${stylePrompt}"
+      【ユーザーの記憶】: ${userMemory}
       
       ${goalInstruction}
       ${contextInstruction}
       
       【出力ルール】JSONのみ
       {
-        "reply": "言葉",
+        "reply": "ユーザーへの言葉（マークダウン対応）",
         "timer_seconds": 推奨秒数(整数),
         "score": 0〜100,
         "is_combo": boolean,
-        "detected_goal": "会話から推測される大目標（例: 部屋の掃除）。変更がなければ前の値を維持",
+        "detected_goal": "推測される大目標（維持・更新）。なければnull",
         "reason": "理由"
       }
     `;
 
-    const requestText = action === 'normal' ? `User: ${message}` : `(System: ${action})`;
+    const requestText = action === 'normal' ? `User: ${message}` : `(System Trigger: ${action})`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -145,10 +131,8 @@ app.post('/api/chat', async (c) => {
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     let result = JSON.parse(rawText);
     
-    result.used_style = usedStyle;
-    result.is_exploration = isExploration;
+    result.used_style = stylePrompt;
 
-    // 通常会話なら記憶更新（省略）
     if (action === 'normal') {
       c.executionCtx.waitUntil((async () => {})());
     }
@@ -160,7 +144,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// フィードバック（変更なし）
+// フィードバック
 app.post('/api/feedback', async (c) => {
   const { email, used_style, is_success } = await c.req.json();
   try {
