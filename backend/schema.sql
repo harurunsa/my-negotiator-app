@@ -4,12 +4,14 @@ CREATE TABLE users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE,
   name TEXT,
-  streak INTEGER DEFAULT 0,       -- コンボ数
-  is_pro INTEGER DEFAULT 0,       -- 課金フラグ (0:無料, 1:有料)
+  streak INTEGER DEFAULT 0,
+  is_pro INTEGER DEFAULT 0,
+  memory TEXT DEFAULT '',
+  current_best_style TEXT DEFAULT 'タスクを極限まで小さく分解し、優しく励ますパートナー',
   
-  -- ★ここがAIの「脳みそ」になります
-  memory TEXT DEFAULT '',         -- 長期記憶（ユーザーの癖や苦手なこと）
-  current_best_style TEXT DEFAULT 'タスクを極限まで小さく分解し、優しく励ますパートナー', -- 現在の最適プロンプト
+  -- ★追加: 回数制限用
+  usage_count INTEGER DEFAULT 0,       -- 今日の使用回数
+  last_usage_date TEXT DEFAULT '',     -- 最後に使った日付 (YYYY-MM-DD)
   
   created_at INTEGER
 );
