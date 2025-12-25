@@ -1,143 +1,106 @@
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
+// ▼▼▼ この変数を定義（IDはStripeダッシュボードからコピペ） ▼▼▼
+const PRICE_YEARLY = "price_1Qxxxxxxxxxxxxxx";  // 年額 $39.99
+const PRICE_MONTHLY = "price_1Qyyyyyyyyyyyyyy"; // 月額 $7.99
+const API_URL = "https://your-backend.workers.dev"; // あなたのAPI URL
 
-type Bindings = {
-  DB: D1Database;
-  STRIPE_SECRET_KEY: string;  // sk_live_...
-  FRONTEND_URL: string;       // https://myapp.pages.dev
-};
+// ... Component関数の中 ...
 
-const app = new Hono<{ Bindings: Bindings }>();
-
-app.use('/*', cors());
-
-// --- Helper: Stripe APIを直接fetchで叩く関数 ---
-async function fetchStripe(path: string, method: string, apiKey: string, bodyParams?: URLSearchParams) {
-  const res = await fetch(`https://api.stripe.com/v1${path}`, {
-    method: method,
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: method === 'POST' ? bodyParams : undefined,
-  });
-
-  const json: any = await res.json();
-  if (!res.ok) {
-    throw new Error(json.error?.message || 'Stripe API Error');
-  }
-  return json;
-}
-
-// --- 1. 決済画面作成 (Checkout) ---
-app.post('/api/create-checkout-session', async (c) => {
-  const { email, priceId } = await c.req.json();
-  const apiKey = c.env.STRIPE_SECRET_KEY;
-
-  try {
-    // A. DBからユーザーを確認
-    const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
-    let customerId = user?.stripe_customer_id;
-
-    // B. Stripe顧客IDがなければ作成 or 検索
-    if (!customerId) {
-      // メールで検索
-      const searchData = await fetchStripe(`/customers?email=${encodeURIComponent(email)}&limit=1`, 'GET', apiKey);
-      
-      if (searchData.data && searchData.data.length > 0) {
-        customerId = searchData.data[0].id;
+  // ▼▼▼ 課金ボタンを押した時の処理 ▼▼▼
+  const handleCheckout = async (priceId: string) => {
+    if (!user) return;
+    try {
+      const res = await fetch(`${API_URL}/api/create-checkout-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email, priceId })
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url; // Stripeへ飛ばす
       } else {
-        // 新規作成
-        const params = new URLSearchParams();
-        params.append('email', email);
-        const newCustomer = await fetchStripe('/customers', 'POST', apiKey, params);
-        customerId = newCustomer.id;
+        alert("Payment Error: " + (data.error || "Unknown"));
       }
-      // DB保存
-      await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(customerId, email).run();
-    }
+    } catch(e) { alert("Connection Error"); }
+  };
 
-    // C. 決済セッション作成
-    const params = new URLSearchParams();
-    params.append('customer', customerId);
-    params.append('mode', 'subscription');
-    params.append('line_items[0][price]', priceId);
-    params.append('line_items[0][quantity]', '1');
-    params.append('success_url', `${c.env.FRONTEND_URL}?payment=success`);
-    params.append('cancel_url', `${c.env.FRONTEND_URL}?payment=cancel`);
-    params.append('allow_promotion_codes', 'true'); // クーポン有効化
+  // ▼▼▼ サブスク管理（解約）ボタンを押した時の処理 ▼▼▼
+  const handlePortal = async () => {
+    if (!user) return;
+    const res = await fetch(`${API_URL}/api/create-portal-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: user.email })
+    });
+    const data = await res.json();
+    if (data.url) window.location.href = data.url;
+    else alert("サブスク情報が見つかりません。");
+  };
 
-    const session = await fetchStripe('/checkout/sessions', 'POST', apiKey, params);
-    return c.json({ url: session.url });
+  // ... (return の中、モーダルを表示する部分) ...
 
-  } catch (e: any) {
-    return c.json({ error: e.message }, 500);
-  }
-});
+  {/* ▼▼▼ アップグレードモーダルの中身（ここが重要） ▼▼▼ */}
+  {showUpgradeModal && (
+    <div style={styles.modalOverlay} onClick={() => setShowUpgradeModal(false)}>
+      <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+        
+        <h2 style={{textAlign:'center', marginBottom:'20px'}}>Upgrade to Pro 🚀</h2>
 
-// --- 2. 管理画面作成 (Portal) ---
-app.post('/api/create-portal-session', async (c) => {
-  const { email } = await c.req.json();
-  const apiKey = c.env.STRIPE_SECRET_KEY;
+        {/* 👑 年額プラン (Main) - デカく、目立つように */}
+        <div 
+          onClick={() => handleCheckout(PRICE_YEARLY)}
+          style={{
+            border: '3px solid #FFD700', 
+            borderRadius: '12px', 
+            padding: '20px', 
+            background: '#FFFBE6', 
+            cursor: 'pointer',
+            textAlign: 'center',
+            marginBottom: '20px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+          }}
+        >
+          <div style={{fontWeight:'bold', color:'#D97706', marginBottom:'5px'}}>
+            BEST VALUE (Save 60%) 🔥
+          </div>
+          <div style={{fontSize:'1.4rem', fontWeight:'900', color:'#333'}}>
+            Yearly Plan
+          </div>
+          <div style={{fontSize:'2rem', fontWeight:'bold', margin:'10px 0'}}>
+            $39.99 <span style={{fontSize:'1rem', color:'#666'}}>/ year</span>
+          </div>
+          <div style={{fontSize:'0.9rem', color:'#555'}}>
+            Pay once. Peace of mind forever.
+          </div>
+        </div>
 
-  try {
-    const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
-    if (!user || !user.stripe_customer_id) throw new Error("Subscription not found");
+        {/* 月額プラン (Sub) - 地味に */}
+        <div 
+          onClick={() => handleCheckout(PRICE_MONTHLY)}
+          style={{
+            border: '1px solid #ddd', 
+            borderRadius: '8px', 
+            padding: '15px', 
+            textAlign: 'center', 
+            cursor: 'pointer',
+            opacity: 0.8
+          }}
+        >
+          <div style={{fontWeight:'bold', color:'#333'}}>Monthly Plan</div>
+          <div>$7.99 / month</div>
+        </div>
 
-    const params = new URLSearchParams();
-    params.append('customer', user.stripe_customer_id);
-    params.append('return_url', c.env.FRONTEND_URL);
+        <div style={{marginTop:'20px', fontSize:'0.8rem', color:'#999', textAlign:'center'}}>
+          Cancel anytime via settings.
+        </div>
 
-    const session = await fetchStripe('/billing_portal/sessions', 'POST', apiKey, params);
-    return c.json({ url: session.url });
+      </div>
+    </div>
+  )}
 
-  } catch (e: any) {
-    return c.json({ error: e.message }, 500);
-  }
-});
-
-// --- 3. Webhook (Stripeからの通知) ---
-// セキュリティのため、本来は署名検証が必要ですが、簡易版としてURLを隠す運用推奨
-app.post('/api/webhook', async (c) => {
-  const body: any = await c.req.json();
-  const apiKey = c.env.STRIPE_SECRET_KEY;
-  const eventType = body.type;
-  const dataObject = body.data.object;
-
-  try {
-    // 決済完了 or 更新完了
-    if (eventType === 'checkout.session.completed' || eventType === 'invoice.payment_succeeded') {
-      const customerId = dataObject.customer;
-      
-      // 有効期限を確認
-      let currentPeriodEnd = 0;
-      if (dataObject.subscription) {
-        const subData = await fetchStripe(`/subscriptions/${dataObject.subscription}`, 'GET', apiKey);
-        currentPeriodEnd = subData.current_period_end;
-      }
-
-      // Pro有効化
-      await c.env.DB.prepare(`
-        UPDATE users SET is_pro = 1, subscription_status = 'active', current_period_end = ? 
-        WHERE stripe_customer_id = ? OR email = ?
-      `).bind(currentPeriodEnd, customerId, dataObject.customer_email).run();
-    }
-
-    // 解約完了 or 支払い失敗
-    if (eventType === 'customer.subscription.deleted' || eventType === 'invoice.payment_failed') {
-      const customerId = dataObject.customer;
-      // Pro無効化
-      await c.env.DB.prepare(`
-        UPDATE users SET is_pro = 0, subscription_status = 'canceled' 
-        WHERE stripe_customer_id = ?
-      `).bind(customerId).run();
-    }
-
-    return c.json({ received: true });
-  } catch (e: any) {
-    console.error(e);
-    return c.json({ error: e.message }, 400);
-  }
-});
-
-export default app;
+  {/* ▼▼▼ 設定画面などに置く「管理ボタン」 ▼▼▼ */}
+  {/* user.is_pro === 1 の時だけ表示 */}
+  {user?.is_pro === 1 && (
+    <button onClick={handlePortal} style={{marginTop:'20px', fontSize:'0.9rem', textDecoration:'underline', background:'none', border:'none', cursor:'pointer'}}>
+      Manage Subscription
+    </button>
+  )}
