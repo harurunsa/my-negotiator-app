@@ -7,7 +7,6 @@ type Bindings = {
   GOOGLE_CLIENT_SECRET: string
   DB: D1Database
   GEMINI_API_KEY: string
-  // Stripe関連の環境変数 (wrangler secret put で設定)
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
   STRIPE_PRICE_ID: string
@@ -121,7 +120,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- Gemini呼び出しロジック (既存維持) ---
+    // --- Gemini呼び出しロジック ---
     let stylePrompt = user.current_best_style || (lang === 'en' ? "Supportive and punchy partner" : "優しく励ますパートナー");
     const userMemory = user.memory || "";
     let contextInstruction = "";
@@ -288,13 +287,19 @@ app.post('/api/checkout', async (c) => {
     const { email } = await c.req.json();
     const stripe = getStripe(c.env);
     
+    // 既存の顧客IDがあるか確認
+    const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
+    let customerId = user?.stripe_customer_id;
+
+    // 既にIDがあれば指定、なければ新規作成(emailを渡す)
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [{ price: c.env.STRIPE_PRICE_ID, quantity: 1 }],
       mode: 'subscription',
       success_url: `${c.env.FRONTEND_URL}/?payment=success`,
       cancel_url: `${c.env.FRONTEND_URL}/?payment=canceled`,
-      customer_email: email,
+      customer: customerId || undefined,
+      customer_email: customerId ? undefined : email,
       metadata: { email }
     });
 
@@ -304,7 +309,31 @@ app.post('/api/checkout', async (c) => {
   }
 });
 
-// --- ★ Stripe Webhook (課金成功時の処理) ---
+// --- ★ サブスク管理ポータル (Billing Portal) ---
+app.post('/api/portal', async (c) => {
+  try {
+    const { email } = await c.req.json();
+    const stripe = getStripe(c.env);
+
+    // DBからCustomer IDを取得
+    const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
+
+    if (!user || !user.stripe_customer_id) {
+      return c.json({ error: "No billing information found" }, 404);
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: user.stripe_customer_id,
+      return_url: c.env.FRONTEND_URL,
+    });
+
+    return c.json({ url: session.url });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// --- ★ Stripe Webhook ---
 app.post('/api/webhook', async (c) => {
   const stripe = getStripe(c.env);
   const signature = c.req.header('stripe-signature');
@@ -318,13 +347,27 @@ app.post('/api/webhook', async (c) => {
     return c.text(`Webhook Error: ${err.message}`, 400);
   }
 
+  // 決済完了時 (Customer IDを保存)
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.metadata?.email || session.customer_details?.email;
+    const customerId = session.customer as string;
     
-    if (email) {
-      await c.env.DB.prepare("UPDATE users SET is_pro = 1 WHERE email = ?").bind(email).run();
+    if (email && customerId) {
+      await c.env.DB.prepare(
+        "UPDATE users SET is_pro = 1, stripe_customer_id = ? WHERE email = ?"
+      ).bind(customerId, email).run();
     }
+  }
+
+  // サブスクリプション削除時 (Pro権限剥奪)
+  if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object as Stripe.Subscription;
+    const customerId = subscription.customer as string;
+    
+    await c.env.DB.prepare(
+      "UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?"
+    ).bind(customerId).run();
   }
 
   return c.text('Received', 200);
