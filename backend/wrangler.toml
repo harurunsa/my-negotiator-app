@@ -9,5 +9,4 @@ binding = "DB"
 database_name = "my-negotiator-db"
 database_id = "40fb3ddd-bbed-4c95-8139-66d26bb5d49c"
 
-[vars]
-FRONTEND_URL = "https://my-negotiator-app.pages.dev/"
+
