@@ -52,12 +52,13 @@ function App() {
   const [chatLog, setChatLog] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentGoal, setCurrentGoal] = useState<string>("");
+  const [showLimitModal, setShowLimitModal] = useState(false); // ★ 追加
   
-  // ★言語設定 (デフォルトはブラウザの設定を見る)
+  // ★言語設定
   const [lang, setLang] = useState<'ja' | 'en'>(
     navigator.language.startsWith('en') ? 'en' : 'ja'
   );
-  const t = TRANSLATIONS[lang]; // 現在の辞書
+  const t = TRANSLATIONS[lang];
 
   const [timerActive, setTimerActive] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
@@ -104,6 +105,35 @@ function App() {
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
+  const handleUpgrade = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`${API_URL}/api/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email })
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } catch (e) { console.error(e); }
+  };
+
+  const handleShare = async () => {
+    if (!user) return;
+    const text = encodeURIComponent(`ADHDの脳内会議を代行してくれるAIアプリ「Negotiator」を使ってみた！\n#MyNegotiatorApp`);
+    const url = encodeURIComponent(window.location.href);
+    window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank');
+
+    await fetch(`${API_URL}/api/share-recovery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: user.email })
+    });
+    
+    setShowLimitModal(false);
+    alert("回復しました！(Chat Reset)");
+  };
+
   const sendMessage = async (manualMessage: string | null, action: 'normal' | 'retry' | 'next' = 'normal') => {
     if (action === 'normal' && !manualMessage?.trim()) return;
     
@@ -134,10 +164,17 @@ function App() {
           action, 
           prev_context: lastAiMsg,
           current_goal: currentGoal,
-          lang // ★言語設定を送る
+          lang 
         }),
       });
       const data = await res.json();
+
+      // ★ 制限チェック
+      if (data.limit_reached) {
+        setShowLimitModal(true);
+        setLoading(false);
+        return;
+      }
 
       if (data.detected_goal) setCurrentGoal(data.detected_goal);
 
@@ -227,6 +264,32 @@ function App() {
   return (
     <div style={styles.appContainer}>
       
+      {/* 課金誘導モーダル */}
+      {showLimitModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <div style={{fontSize:'3rem', marginBottom:'10px'}}>🔋</div>
+            <h2 style={{margin:'0 0 10px 0', color:'#333'}}>Energy Low</h2>
+            <p style={{color:'#666', lineHeight:'1.5'}}>
+              {lang === 'ja' 
+                ? "無料版の会話上限(1日5回)に達しました。\nシェアして回復するか、Pro版で無制限に。"
+                : "Daily limit reached.\nShare to reset or Go Pro."}
+            </p>
+            <div style={{display:'flex', gap:'10px', flexDirection:'column', marginTop:'20px'}}>
+              <button onClick={handleShare} style={styles.modalBtnShare}>
+                🐦 Tweet & Reset (Free)
+              </button>
+              <button onClick={handleUpgrade} style={styles.modalBtnPro}>
+                👑 Upgrade to Pro (Yearly)
+              </button>
+              <button onClick={() => setShowLimitModal(false)} style={styles.modalBtnClose}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {timerActive && (
         <div style={styles.timerOverlay}>
           <div style={styles.timerContent}>
@@ -265,7 +328,6 @@ function App() {
           </div>
         </div>
         
-        {/* 言語切り替えボタン & ストリーク */}
         <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
           <button onClick={toggleLang} style={styles.langBtn}>
             {lang === 'ja' ? 'EN' : 'JP'}
@@ -481,13 +543,21 @@ const styles: { [key: string]: React.CSSProperties } = {
   inputArea: { padding: '15px', background: '#fff', display: 'flex', gap: '12px', alignItems: 'center', paddingBottom: 'max(15px, env(safe-area-inset-bottom))', boxShadow: '0 -5px 20px rgba(0,0,0,0.03)' },
   inputField: { flex: 1, padding: '16px 20px', borderRadius: '25px', border: 'none', fontSize: '1rem', outline: 'none', background: '#F1F5F9', color: '#1a1a1a' },
   sendBtn: { width: '50px', height: '50px', borderRadius: '50%', background: '#3A86FF', color: '#fff', border: 'none', fontSize: '1.4rem', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 4px 12px rgba(58, 134, 255, 0.3)' },
+  
   timerOverlay: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(10, 10, 15, 0.96)', zIndex: 100, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(10px)' },
   timerContent: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' },
   timerCircleWrapper: { position: 'relative', width: '280px', height: '280px', display: 'flex', justifyContent: 'center', alignItems: 'center' },
   timerTextContainer: { position: 'absolute', textAlign: 'center', color: '#fff' },
   timerNumbers: { fontSize: '4rem', fontWeight: '700', fontFamily: 'monospace', letterSpacing: '-2px', textShadow: '0 0 30px rgba(0,255,194,0.3)' },
   timerLabel: { fontSize: '1rem', color: '#888', marginTop: '5px', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: '600' },
-  timerCompleteBtn: { marginTop: '60px', background: '#00FFC2', border: 'none', color: '#000', padding: '16px 50px', borderRadius: '50px', fontSize: '1.2rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 0 30px rgba(0, 255, 194, 0.4)', textTransform: 'uppercase', letterSpacing: '1px' }
+  timerCompleteBtn: { marginTop: '60px', background: '#00FFC2', border: 'none', color: '#000', padding: '16px 50px', borderRadius: '50px', fontSize: '1.2rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 0 30px rgba(0, 255, 194, 0.4)', textTransform: 'uppercase', letterSpacing: '1px' },
+
+  // モーダル用
+  modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center' },
+  modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
+  modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
+  modalBtnPro: { background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem', boxShadow: '0 4px 15px rgba(253, 185, 49, 0.4)' },
+  modalBtnClose: { background: 'transparent', border: 'none', color: '#999', padding: '10px', cursor: 'pointer', fontSize: '0.9rem', marginTop: '10px' }
 };
 
 export default App
