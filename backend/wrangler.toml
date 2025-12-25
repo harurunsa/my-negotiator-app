@@ -10,5 +10,4 @@ database_name = "my-negotiator-db"
 database_id = "40fb3ddd-bbed-4c95-8139-66d26bb5d49c"
 
 [vars]
-STRIPE_SECRET_KEY = "sk_live_xxxxxxxx..."  # 本番用の秘密鍵
-FRONTEND_URL = "https://あなたのアプリ.pages.dev"
+FRONTEND_URL = "https://my-negotiator-app.pages.dev/"
