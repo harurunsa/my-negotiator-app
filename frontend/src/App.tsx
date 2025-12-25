@@ -1,106 +1,96 @@
-// ▼▼▼ この変数を定義（IDはStripeダッシュボードからコピペ） ▼▼▼
-const PRICE_YEARLY = "price_1Qxxxxxxxxxxxxxx";  // 年額 $39.99
-const PRICE_MONTHLY = "price_1Qyyyyyyyyyyyyyy"; // 月額 $7.99
-const API_URL = "https://your-backend.workers.dev"; // あなたのAPI URL
+// ---------------------------------------------------
+// 定数定義 (StripeダッシュボードからIDをコピペ)
+// ---------------------------------------------------
+const PRICE_YEARLY = "price_xxxxxxxxxxxxxx";  // 年額 (Main)
+const PRICE_MONTHLY = "price_yyyyyyyyyyyyyy"; // 月額 (Sub)
+const API_URL = "https://your-backend.workers.dev"; // あなたのバックエンドURL
 
-// ... Component関数の中 ...
+// ... コンポーネント内部 ...
 
-  // ▼▼▼ 課金ボタンを押した時の処理 ▼▼▼
-  const handleCheckout = async (priceId: string) => {
-    if (!user) return;
-    try {
-      const res = await fetch(`${API_URL}/api/create-checkout-session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, priceId })
-      });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url; // Stripeへ飛ばす
-      } else {
-        alert("Payment Error: " + (data.error || "Unknown"));
-      }
-    } catch(e) { alert("Connection Error"); }
-  };
-
-  // ▼▼▼ サブスク管理（解約）ボタンを押した時の処理 ▼▼▼
-  const handlePortal = async () => {
-    if (!user) return;
-    const res = await fetch(`${API_URL}/api/create-portal-session`, {
+// 課金開始ボタン
+const handleCheckout = async (priceId: string) => {
+  if (!user) return alert("Please login first.");
+  try {
+    const res = await fetch(`${API_URL}/api/create-checkout-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: user.email })
+      body: JSON.stringify({ email: user.email, priceId })
     });
     const data = await res.json();
-    if (data.url) window.location.href = data.url;
-    else alert("サブスク情報が見つかりません。");
-  };
+    if (data.url) window.location.href = data.url; // Stripeへ遷移
+    else alert("Error: " + (data.error || "Unknown"));
+  } catch(e) { alert("Network Error"); }
+};
 
-  // ... (return の中、モーダルを表示する部分) ...
+// サブスク管理ボタン (解約など)
+const handlePortal = async () => {
+  if (!user) return;
+  const res = await fetch(`${API_URL}/api/create-portal-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: user.email })
+  });
+  const data = await res.json();
+  if (data.url) window.location.href = data.url;
+  else alert("Subscription not found.");
+};
 
-  {/* ▼▼▼ アップグレードモーダルの中身（ここが重要） ▼▼▼ */}
-  {showUpgradeModal && (
-    <div style={styles.modalOverlay} onClick={() => setShowUpgradeModal(false)}>
-      <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
-        
-        <h2 style={{textAlign:'center', marginBottom:'20px'}}>Upgrade to Pro 🚀</h2>
+// シェア回復ボタン (既存機能)
+const handleShareRecover = async () => {
+  // Xでシェアするウィンドウを開く
+  const text = encodeURIComponent("ADHDハックツール... #Negotiator");
+  window.open(`https://twitter.com/intent/tweet?text=${text}&url=${window.location.href}`, '_blank');
+  
+  // APIに報告して回復
+  await fetch(`${API_URL}/api/recover-by-share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: user.email })
+  });
+  alert("3回分回復しました！");
+  // 画面リロードなど
+};
 
-        {/* 👑 年額プラン (Main) - デカく、目立つように */}
-        <div 
-          onClick={() => handleCheckout(PRICE_YEARLY)}
-          style={{
-            border: '3px solid #FFD700', 
-            borderRadius: '12px', 
-            padding: '20px', 
-            background: '#FFFBE6', 
-            cursor: 'pointer',
-            textAlign: 'center',
-            marginBottom: '20px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-          }}
-        >
-          <div style={{fontWeight:'bold', color:'#D97706', marginBottom:'5px'}}>
-            BEST VALUE (Save 60%) 🔥
-          </div>
-          <div style={{fontSize:'1.4rem', fontWeight:'900', color:'#333'}}>
-            Yearly Plan
-          </div>
-          <div style={{fontSize:'2rem', fontWeight:'bold', margin:'10px 0'}}>
-            $39.99 <span style={{fontSize:'1rem', color:'#666'}}>/ year</span>
-          </div>
-          <div style={{fontSize:'0.9rem', color:'#555'}}>
-            Pay once. Peace of mind forever.
-          </div>
-        </div>
+// ... JSXのreturn内部 ...
 
-        {/* 月額プラン (Sub) - 地味に */}
-        <div 
-          onClick={() => handleCheckout(PRICE_MONTHLY)}
-          style={{
-            border: '1px solid #ddd', 
-            borderRadius: '8px', 
-            padding: '15px', 
-            textAlign: 'center', 
-            cursor: 'pointer',
-            opacity: 0.8
-          }}
-        >
-          <div style={{fontWeight:'bold', color:'#333'}}>Monthly Plan</div>
-          <div>$7.99 / month</div>
-        </div>
+{/* ▼▼▼ アップグレードモーダル (年額推しデザイン) ▼▼▼ */}
+{showUpgradeModal && (
+  <div style={styles.modalOverlay} onClick={() => setShowUpgradeModal(false)}>
+    <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+      <h2 style={{textAlign:'center'}}>Upgrade to Pro 🚀</h2>
 
-        <div style={{marginTop:'20px', fontSize:'0.8rem', color:'#999', textAlign:'center'}}>
-          Cancel anytime via settings.
-        </div>
+      {/* 年額プラン (Main) */}
+      <div onClick={() => handleCheckout(PRICE_YEARLY)}
+           style={{
+             border: '3px solid #FFD700', background: '#FFFBE6', padding: '20px', 
+             borderRadius: '12px', cursor: 'pointer', marginBottom: '15px', textAlign: 'center'
+           }}>
+        <div style={{color:'#D97706', fontWeight:'bold'}}>🔥 SAVE 60%</div>
+        <div style={{fontSize:'1.8rem', fontWeight:'bold'}}>$39.99 <span style={{fontSize:'1rem'}}>/ year</span></div>
+        <small>Best Choice for ADHDer</small>
+      </div>
 
+      {/* 月額プラン (Sub) */}
+      <div onClick={() => handleCheckout(PRICE_MONTHLY)}
+           style={{
+             border: '1px solid #ccc', padding: '10px', borderRadius: '8px', 
+             cursor: 'pointer', textAlign: 'center', opacity: 0.8
+           }}>
+        <strong>Monthly Plan</strong>: $7.99 / month
       </div>
     </div>
-  )}
+  </div>
+)}
 
-  {/* ▼▼▼ 設定画面などに置く「管理ボタン」 ▼▼▼ */}
-  {/* user.is_pro === 1 の時だけ表示 */}
-  {user?.is_pro === 1 && (
-    <button onClick={handlePortal} style={{marginTop:'20px', fontSize:'0.9rem', textDecoration:'underline', background:'none', border:'none', cursor:'pointer'}}>
-      Manage Subscription
-    </button>
-  )}
+{/* ▼▼▼ 設定画面などに置くボタン ▼▼▼ */}
+{/* Pro会員なら管理ボタン、無料ならアップグレードボタン */}
+{user?.is_pro === 1 ? (
+  <button onClick={handlePortal}>Manage Subscription (Cancel)</button>
+) : (
+  <button onClick={() => setShowUpgradeModal(true)}>Upgrade to Pro</button>
+)}
+
+{/* シェア回復ボタン */}
+{user?.is_pro === 0 && (
+  <button onClick={handleShareRecover}>Share to Recover Limits 🐦</button>
+)}
