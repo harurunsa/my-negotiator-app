@@ -1,15 +1,24 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import Stripe from 'stripe'
 
 type Bindings = {
   GOOGLE_CLIENT_ID: string
   GOOGLE_CLIENT_SECRET: string
   DB: D1Database
   GEMINI_API_KEY: string
+  // Stripe関連の環境変数 (wrangler secret put で設定)
+  STRIPE_SECRET_KEY: string
+  STRIPE_WEBHOOK_SECRET: string
+  STRIPE_PRICE_ID: string
+  FRONTEND_URL: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
+
+// --- 定数 ---
+const DAILY_LIMIT = 5; // 無料版の1日あたりの会話回数
 
 const MESSAGES = {
   ja: {
@@ -17,27 +26,30 @@ const MESSAGES = {
     next_instruction: "【コンボ継続中！】短くテンション高く褒めて、間髪入れずに次のステップを出してください。",
     goal_instruction: (goal: string) => `【絶対目標】: "${goal}"\n(※全ての提案はこの達成に向かうこと。関係ない話題は禁止)`,
     goal_default: "会話からユーザーのゴールを推測し、そこにロックオンしてください。",
-    ai_persona: "あなたはADHDの脳特性をハックする実行機能拡張AIです。"
+    ai_persona: "あなたはADHDの脳特性をハックする実行機能拡張AIです。",
+    limit_reached: "無料版の制限に達しました。SNSシェアで回復するか、Proプランにアップグレードしてください！"
   },
   en: {
     retry_instruction: "[URGENT: User Rejection] The previous proposal was rejected. Apologize immediately and break the task down to the absolute physical minimum (e.g., just moving a finger). No motivational speeches, just easy physics.",
     next_instruction: "[COMBO ACTIVE!] Praise shortly and energetically, then present the next step immediately.",
     goal_instruction: (goal: string) => `[ABSOLUTE GOAL]: "${goal}"\n(*All proposals must lead to this. No distractions.)`,
     goal_default: "Infer the user's current goal from the conversation and lock onto it.",
-    ai_persona: "You are an Executive Function Augmentation AI that hacks ADHD brain characteristics. Be punchy, empathetic, and gamified."
+    ai_persona: "You are an Executive Function Augmentation AI that hacks ADHD brain characteristics. Be punchy, empathetic, and gamified.",
+    limit_reached: "Free limit reached. Share to reset or Upgrade!"
   }
 };
 
-// --- ★最強のJSON抽出関数 ---
+// --- ヘルパー関数 ---
 function extractJson(text: string): string {
-  // 最初の '{' から 最後の '}' までを切り抜く
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1) return "{}"; // 見つからなければ空JSON
+  if (start === -1 || end === -1) return "{}";
   return text.substring(start, end + 1);
 }
 
-// --- 認証周り (変更なし) ---
+const getStripe = (env: Bindings) => new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' as any });
+
+// --- 認証周り ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -70,27 +82,50 @@ app.get('/auth/callback', async (c) => {
     ).bind(userData.id, userData.email, userData.name, Date.now()).run();
 
     const user: any = await c.env.DB.prepare("SELECT streak, is_pro FROM users WHERE id = ?").bind(userData.id).first();
-    const frontendUrl = "https://my-negotiator-app.pages.dev"
+    const frontendUrl = c.env.FRONTEND_URL || "https://my-negotiator-app.pages.dev";
+    
     return c.redirect(`${frontendUrl}?email=${userData.email}&name=${encodeURIComponent(userData.name)}&streak=${user.streak || 0}&pro=${user.is_pro || 0}`)
   } catch (e: any) {
     return c.text(`Auth Error: ${e.message}`, 500)
   }
 })
 
-// --- AIチャット (リトライ機能付き) ---
+// --- AIチャット (回数制限 & Stripe対応) ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     const t = (MESSAGES as any)[lang] || MESSAGES.ja;
     
+    // ユーザー取得
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+    if (!user) return c.json({ error: "User not found" }, 401);
+
+    // ★ 日付変更チェックと回数リセット
+    const today = new Date().toISOString().split('T')[0];
+    if (user.last_usage_date !== today) {
+      await c.env.DB.prepare("UPDATE users SET usage_count = 0, last_usage_date = ? WHERE email = ?").bind(today, email).run();
+      user.usage_count = 0;
+    }
+
+    // ★ 制限チェック (Proでなく、かつ制限を超えている場合)
+    if (!user.is_pro && user.usage_count >= DAILY_LIMIT) {
+      return c.json({ 
+        limit_reached: true, 
+        reply: t.limit_reached
+      });
+    }
+
+    // ★ 回数インクリメント (システムメッセージ以外の場合)
+    if (action === 'normal') {
+      await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
+    }
+
+    // --- Gemini呼び出しロジック (既存維持) ---
     let stylePrompt = user.current_best_style || (lang === 'en' ? "Supportive and punchy partner" : "優しく励ますパートナー");
     const userMemory = user.memory || "";
-
     let contextInstruction = "";
     let isExploration = false;
-
     const goalInstruction = current_goal ? t.goal_instruction(current_goal) : t.goal_default;
 
     if (action === 'retry') {
@@ -105,7 +140,7 @@ app.post('/api/chat', async (c) => {
     // 変異ロジック
     let usedStyle = stylePrompt;
     if (isExploration && action !== 'retry') {
-      const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+      const mutationUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
       try {
         const mutationPrompt = lang === 'en' 
           ? `Current style: "${stylePrompt}". Create a slight variation. Output description only.`
@@ -121,7 +156,7 @@ app.post('/api/chat', async (c) => {
       } catch (e) {}
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
     
     const systemInstruction = `
       ${t.ai_persona}
@@ -145,10 +180,10 @@ app.post('/api/chat', async (c) => {
 
     const requestText = action === 'normal' ? `User: ${message}` : `(System Trigger: ${action})`;
 
-    // --- ★ここから自動リトライロジック ---
+    // 自動リトライロジック
     let result = null;
     let retryCount = 0;
-    const maxRetries = 3; // 最大3回までやり直す
+    const maxRetries = 3;
 
     while (retryCount < maxRetries) {
       try {
@@ -163,17 +198,14 @@ app.post('/api/chat', async (c) => {
 
         const data: any = await response.json();
         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        
-        // JSON抽出を試みる
         const cleanedText = extractJson(rawText);
         const parsed = JSON.parse(cleanedText);
 
-        // 中身がちゃんとあるか確認
         if (parsed.reply && parsed.reply.trim() !== "") {
           result = parsed;
-          break; // 成功！ループを抜ける
+          break;
         } else {
-          throw new Error("Empty reply"); // 中身が空ならやり直し
+          throw new Error("Empty reply");
         }
       } catch (e) {
         console.log(`Retry ${retryCount + 1}/${maxRetries} failed:`, e);
@@ -181,7 +213,6 @@ app.post('/api/chat', async (c) => {
       }
     }
 
-    // --- 全リトライ失敗時の救済措置 ---
     if (!result) {
       result = {
         reply: lang === 'en' 
@@ -193,12 +224,11 @@ app.post('/api/chat', async (c) => {
         detected_goal: current_goal
       };
     }
-    // ------------------------------------
 
     result.used_style = usedStyle; 
     result.is_exploration = isExploration;
 
-    // 記憶更新 (成功時のみ)
+    // 記憶更新
     if ((action === 'normal' || action === 'next') && result.reply) {
       c.executionCtx.waitUntil((async () => {
         try {
@@ -231,7 +261,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// フィードバック
+// --- フィードバック ---
 app.post('/api/feedback', async (c) => {
   const { email, used_style, is_success } = await c.req.json();
   try {
@@ -241,6 +271,63 @@ app.post('/api/feedback', async (c) => {
     const user: any = await c.env.DB.prepare("SELECT streak FROM users WHERE email = ?").bind(email).first();
     return c.json({ streak: user.streak });
   } catch (e) { return c.json({ error: "DB Error" }, 500); }
+});
+
+// --- ★ SNSシェアでの回復 ---
+app.post('/api/share-recovery', async (c) => {
+  try {
+    const { email } = await c.req.json();
+    await c.env.DB.prepare("UPDATE users SET usage_count = 0 WHERE email = ?").bind(email).run();
+    return c.json({ success: true, message: "Usage limit reset!" });
+  } catch(e) { return c.json({ error: "DB Error"}, 500); }
+});
+
+// --- ★ Stripe 決済セッション作成 ---
+app.post('/api/checkout', async (c) => {
+  try {
+    const { email } = await c.req.json();
+    const stripe = getStripe(c.env);
+    
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{ price: c.env.STRIPE_PRICE_ID, quantity: 1 }],
+      mode: 'subscription',
+      success_url: `${c.env.FRONTEND_URL}/?payment=success`,
+      cancel_url: `${c.env.FRONTEND_URL}/?payment=canceled`,
+      customer_email: email,
+      metadata: { email }
+    });
+
+    return c.json({ url: session.url });
+  } catch(e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// --- ★ Stripe Webhook (課金成功時の処理) ---
+app.post('/api/webhook', async (c) => {
+  const stripe = getStripe(c.env);
+  const signature = c.req.header('stripe-signature');
+  const body = await c.req.text();
+
+  let event;
+  try {
+    if (!signature) throw new Error("No signature");
+    event = await stripe.webhooks.constructEventAsync(body, signature, c.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err: any) {
+    return c.text(`Webhook Error: ${err.message}`, 400);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const email = session.metadata?.email || session.customer_details?.email;
+    
+    if (email) {
+      await c.env.DB.prepare("UPDATE users SET is_pro = 1 WHERE email = ?").bind(email).run();
+    }
+  }
+
+  return c.text('Received', 200);
 });
 
 export default app
