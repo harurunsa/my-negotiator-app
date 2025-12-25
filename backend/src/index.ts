@@ -1,25 +1,21 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
+// Cloudflare環境変数の型定義
 type Bindings = {
   DB: D1Database;
-  STRIPE_SECRET_KEY: string;
-  STRIPE_WEBHOOK_SECRET: string;
-  FRONTEND_URL: string;
+  STRIPE_SECRET_KEY: string; // ここに秘密鍵が入ってくる
+  FRONTEND_URL: string;      // 戻り先のURL
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+// CORS許可（フロントエンドからのアクセスを許す）
 app.use('/*', cors());
 
-// --- ヘルパー関数: Stripe APIを直接叩くやつ ---
-async function fetchStripe(path: string, method: string, apiKey: string, bodyData?: Record<string, string>) {
-  const params = new URLSearchParams();
-  if (bodyData) {
-    for (const [key, value] of Object.entries(bodyData)) {
-      params.append(key, value);
-    }
-  }
+// --- Helper: Stripe APIを直接叩く関数 (ライブラリ不要) ---
+async function fetchStripe(path: string, method: string, apiKey: string, bodyParams?: URLSearchParams) {
+  if (!apiKey) throw new Error('Stripe API Key is missing in environment variables.');
 
   const res = await fetch(`https://api.stripe.com/v1${path}`, {
     method: method,
@@ -27,45 +23,48 @@ async function fetchStripe(path: string, method: string, apiKey: string, bodyDat
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: method === 'POST' ? params : undefined,
+    body: method === 'POST' ? bodyParams : undefined,
   });
 
+  const json: any = await res.json();
   if (!res.ok) {
-    const err = await res.json() as any;
-    throw new Error(err.error?.message || 'Stripe API Error');
+    throw new Error(json.error?.message || 'Stripe API Error');
   }
-  return res.json();
+  return json;
 }
 
 // --- 1. 決済画面作成 (Checkout) ---
 app.post('/api/create-checkout-session', async (c) => {
-  const { email, priceId } = await c.req.json();
-  const apiKey = c.env.STRIPE_SECRET_KEY;
-
   try {
-    // A. まずDBから顧客IDを探す
-    const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
-    let customerId = user?.stripe_customer_id;
+    const { email, priceId } = await c.req.json();
+    const apiKey = c.env.STRIPE_SECRET_KEY; // 環境変数から取得
 
-    // B. なければStripeで検索 or 作成
+    // A. DBからユーザーを確認
+    const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+    if (!user) throw new Error("User not found in DB");
+
+    let customerId = user.stripe_customer_id;
+
+    // B. Stripe顧客IDがなければ作成 or 検索
     if (!customerId) {
-      // メールで検索
-      const searchRes: any = await fetchStripe(`/customers?email=${encodeURIComponent(email)}&limit=1`, 'GET', apiKey);
+      // メールでStripe側を検索
+      const searchData = await fetchStripe(`/customers?email=${encodeURIComponent(email)}&limit=1`, 'GET', apiKey);
       
-      if (searchRes.data && searchRes.data.length > 0) {
-        customerId = searchRes.data[0].id;
+      if (searchData.data && searchData.data.length > 0) {
+        customerId = searchData.data[0].id;
       } else {
-        // 新規作成
-        const newCustomer: any = await fetchStripe('/customers', 'POST', apiKey, { email });
+        // Stripe側に新規作成
+        const params = new URLSearchParams();
+        params.append('email', email);
+        // 必要ならmetadataでuserIdなども保存可能
+        const newCustomer = await fetchStripe('/customers', 'POST', apiKey, params);
         customerId = newCustomer.id;
       }
-      
-      // DBに保存しておく
+      // DBに紐付け保存
       await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(customerId, email).run();
     }
 
-    // C. 決済セッション作成 (ここが手動だと少しパラメーターが多い)
-    // URLSearchParamsはネストに対応していないので、キー名を直接書く
+    // C. 決済セッション作成
     const params = new URLSearchParams();
     params.append('customer', customerId);
     params.append('mode', 'subscription');
@@ -73,89 +72,103 @@ app.post('/api/create-checkout-session', async (c) => {
     params.append('line_items[0][quantity]', '1');
     params.append('success_url', `${c.env.FRONTEND_URL}?payment=success`);
     params.append('cancel_url', `${c.env.FRONTEND_URL}?payment=cancel`);
-    params.append('allow_promotion_codes', 'true');
+    params.append('allow_promotion_codes', 'true'); // クーポン入力欄を表示
 
-    // fetchStripeヘルパーを使わず、ここでは直接fetchする（複雑なキーに対応するため）
-    const sessionRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params
-    });
+    // metadataを入れておくとWebhookで照合しやすい
+    params.append('metadata[userId]', user.id);
+    params.append('metadata[userEmail]', email);
+
+    const session = await fetchStripe('/checkout/sessions', 'POST', apiKey, params);
     
-    const session: any = await sessionRes.json();
-    if(session.error) throw new Error(session.error.message);
-
     return c.json({ url: session.url });
 
   } catch (e: any) {
+    console.error(e);
     return c.json({ error: e.message }, 500);
   }
 });
 
 // --- 2. 管理画面作成 (Portal) ---
+// 解約やカード変更はこちら
 app.post('/api/create-portal-session', async (c) => {
-  const { email } = await c.req.json();
-  const apiKey = c.env.STRIPE_SECRET_KEY;
-
   try {
+    const { email } = await c.req.json();
+    const apiKey = c.env.STRIPE_SECRET_KEY;
+
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
-    if (!user || !user.stripe_customer_id) throw new Error("Subscription not found");
+    if (!user || !user.stripe_customer_id) throw new Error("No subscription found (Customer ID missing)");
 
-    const session: any = await fetchStripe('/billing_portal/sessions', 'POST', apiKey, {
-      customer: user.stripe_customer_id,
-      return_url: c.env.FRONTEND_URL
-    });
+    const params = new URLSearchParams();
+    params.append('customer', user.stripe_customer_id);
+    params.append('return_url', c.env.FRONTEND_URL);
 
+    const session = await fetchStripe('/billing_portal/sessions', 'POST', apiKey, params);
+    
     return c.json({ url: session.url });
+
   } catch (e: any) {
+    console.error(e);
     return c.json({ error: e.message }, 500);
   }
 });
 
-// --- 3. Webhook (簡易版) ---
-// ライブラリがないので署名検証はスキップし、JSONボディを直接見る
-// ※セキュリティ的にはWebhook URLを推測されにくいものにするのがベター（例: /api/webhook_xyz123）
+// --- 3. Webhook (Stripeからの通知受信) ---
 app.post('/api/webhook', async (c) => {
-  const body: any = await c.req.json();
-  const apiKey = c.env.STRIPE_SECRET_KEY;
-
   try {
+    const body: any = await c.req.json();
+    const apiKey = c.env.STRIPE_SECRET_KEY;
     const eventType = body.type;
     const dataObject = body.data.object;
 
-    // A. 決済完了・更新成功
+    // === A. 決済完了 (初回・更新) ===
     if (eventType === 'checkout.session.completed' || eventType === 'invoice.payment_succeeded') {
       const customerId = dataObject.customer;
       
-      // 有効期限を取得するためにSubscription情報をStripeに取りに行く
-      const subId = dataObject.subscription;
-      if(subId) {
-        const subData: any = await fetchStripe(`/subscriptions/${subId}`, 'GET', apiKey);
-        const currentPeriodEnd = subData.current_period_end;
+      // 有効期限(current_period_end)を取得
+      let currentPeriodEnd = 0;
+      // checkout.sessionの場合はsubscription IDから取得
+      let subId = dataObject.subscription;
+      
+      if (subId) {
+        // subscriptionオブジェクトを取得して期限を確認
+        const subData = await fetchStripe(`/subscriptions/${subId}`, 'GET', apiKey);
+        currentPeriodEnd = subData.current_period_end;
+      }
 
-        // DB更新: 有料会員へ
-        await c.env.DB.prepare(`
-          UPDATE users SET is_pro = 1, subscription_status = 'active', current_period_end = ? 
-          WHERE stripe_customer_id = ? OR email = ?
-        `).bind(currentPeriodEnd, customerId, dataObject.customer_email).run();
+      // DB更新: Pro有効化
+      // emailが取れない場合もあるので、基本はstripe_customer_idで更新
+      await c.env.DB.prepare(`
+        UPDATE users 
+        SET is_pro = 1, subscription_status = 'active', current_period_end = ? 
+        WHERE stripe_customer_id = ?
+      `).bind(currentPeriodEnd, customerId).run();
+
+      // もしDBのstripe_customer_idが未設定の段階なら、emailでフォールバック更新
+      if (dataObject.customer_email) {
+         await c.env.DB.prepare(`
+          UPDATE users 
+          SET is_pro = 1, subscription_status = 'active', stripe_customer_id = ?, current_period_end = ? 
+          WHERE email = ? AND stripe_customer_id IS NULL
+        `).bind(customerId, currentPeriodEnd, dataObject.customer_email).run();
       }
     }
 
-    // B. 解約・支払い失敗
+    // === B. 解約完了・支払い失敗 ===
     if (eventType === 'customer.subscription.deleted' || eventType === 'invoice.payment_failed') {
       const customerId = dataObject.customer;
-      // 無料会員へ戻す
+      
+      // DB更新: Pro無効化
       await c.env.DB.prepare(`
-        UPDATE users SET is_pro = 0, subscription_status = 'canceled' 
+        UPDATE users 
+        SET is_pro = 0, subscription_status = 'canceled' 
         WHERE stripe_customer_id = ?
       `).bind(customerId).run();
     }
 
     return c.json({ received: true });
   } catch (e: any) {
+    console.error("Webhook Error:", e);
+    // Stripeに200以外を返すとリトライされてしまうので、エラーでもログに出して400を返す
     return c.json({ error: e.message }, 400);
   }
 });
