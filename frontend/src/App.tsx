@@ -52,7 +52,7 @@ function App() {
   const [chatLog, setChatLog] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentGoal, setCurrentGoal] = useState<string>("");
-  const [showLimitModal, setShowLimitModal] = useState(false); // ★ 追加
+  const [showLimitModal, setShowLimitModal] = useState(false);
   
   // ★言語設定
   const [lang, setLang] = useState<'ja' | 'en'>(
@@ -108,6 +108,7 @@ function App() {
   const handleUpgrade = async () => {
     if (!user) return;
     try {
+      setLoading(true);
       const res = await fetch(`${API_URL}/api/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -115,7 +116,33 @@ function App() {
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+      console.error(e);
+      setLoading(false);
+    }
+  };
+
+  const handlePortal = async () => {
+    if (!user) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_URL}/api/portal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email })
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert("管理画面への移動に失敗しました。まだ課金履歴がない可能性があります。");
+        setLoading(false);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("エラーが発生しました");
+      setLoading(false);
+    }
   };
 
   const handleShare = async () => {
@@ -332,10 +359,18 @@ function App() {
           <button onClick={toggleLang} style={styles.langBtn}>
             {lang === 'ja' ? 'EN' : 'JP'}
           </button>
+          
           {user && (
-             <div style={styles.streakBox}>
-               <span style={styles.streakLabel}>{t.streak_label}</span>
-               <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
+             <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+               {user.is_pro === 1 && (
+                 <button onClick={handlePortal} style={styles.portalBtn}>
+                   ⚙️ {lang === 'ja' ? '管理' : 'Manage'}
+                 </button>
+               )}
+               <div style={styles.streakBox}>
+                 <span style={styles.streakLabel}>{t.streak_label}</span>
+                 <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
+               </div>
              </div>
           )}
         </div>
@@ -493,6 +528,11 @@ const styles: { [key: string]: React.CSSProperties } = {
   langBtn: {
     padding: '5px 10px', fontSize: '0.7rem', borderRadius: '15px', border: '1px solid #ddd',
     background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555'
+  },
+  portalBtn: {
+    padding: '6px 12px', fontSize: '0.75rem', borderRadius: '15px', border: 'none',
+    background: '#eef2f6', cursor: 'pointer', fontWeight: 'bold', color: '#555',
+    display: 'flex', alignItems: 'center', gap: '4px'
   },
   streakBox: { textAlign: 'right' },
   streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
