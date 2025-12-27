@@ -11,5 +11,7 @@ database_id = "40fb3ddd-bbed-4c95-8139-66d26bb5d49c"
 
 
 [vars]
-STRIPE_PRICE_ID = "price_xxxxxxxxxxxxx" # Price IDは公開しても問題ありません
-FRONTEND_URL = "https://my-negotiator-app.pages.dev" # またはあなたのフロントエンドURL
+# Stripeダッシュボードで作成したPrice ID (price_...) を設定してください
+STRIPE_PRICE_ID_YEARLY = "prod_SmKG3aLnx69rW8"  # 年額プラン
+STRIPE_PRICE_ID_MONTHLY = "prod_SmKGlWKaPxm783" # 月額プラン
+FRONTEND_URL = "https://my-negotiator-app.pages.dev"
