@@ -5,7 +5,7 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "hono": "^4.0.0"
+    "hono": "^4.0.0",
     "stripe": "^14.0.0"  
   },
   "devDependencies": {
