@@ -23,17 +23,7 @@ const TRANSLATIONS = {
     timer_focus: "FOCUS",
     timer_complete: "Mission Complete",
     system_retry: "😰 ハードルを極限まで下げています...",
-    system_next: "🚀 ナイス！次のステップへ！",
-    // 追加
-    header_pro_btn: "👑 Proにアップグレード",
-    header_manage_btn: "⚙️ サブスク管理",
-    modal_title: "Unlock Your Brain 🧠",
-    modal_desc: "ADHD特化のAIパートナーを、無制限に。",
-    plan_yearly_badge: "2ヶ月分お得！",
-    plan_yearly_label: "年額プラン (Yearly)",
-    plan_yearly_price: "¥XXXX / 年", // ※Stripeの価格に合わせて変更可
-    plan_btn_upgrade: "今すぐアップグレード",
-    plan_btn_restore: "購入を復元 / 管理"
+    system_next: "🚀 ナイス！次のステップへ！"
   },
   en: {
     logo: "Negotiator",
@@ -52,17 +42,7 @@ const TRANSLATIONS = {
     timer_focus: "FOCUS",
     timer_complete: "Mission Complete",
     system_retry: "😰 Lowering hurdles to the limit...",
-    system_next: "🚀 Nice! Next step!",
-    // Added
-    header_pro_btn: "👑 Upgrade to Pro",
-    header_manage_btn: "⚙️ Manage Sub",
-    modal_title: "Unlock Your Brain 🧠",
-    modal_desc: "Unlimited access to your ADHD AI partner.",
-    plan_yearly_badge: "Save 2 Months!",
-    plan_yearly_label: "Yearly Plan",
-    plan_yearly_price: "¥XXXX / Year",
-    plan_btn_upgrade: "Upgrade Now",
-    plan_btn_restore: "Restore / Manage"
+    system_next: "🚀 Nice! Next step!"
   }
 };
 
@@ -72,9 +52,9 @@ function App() {
   const [chatLog, setChatLog] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentGoal, setCurrentGoal] = useState<string>("");
-  const [showLimitModal, setShowLimitModal] = useState(false); // 制限到達時のモーダル
-  const [showPlanModal, setShowPlanModal] = useState(false);   // 自発的なアップグレードモーダル
+  const [showLimitModal, setShowLimitModal] = useState(false);
   
+  // ★言語設定
   const [lang, setLang] = useState<'ja' | 'en'>(
     navigator.language.startsWith('en') ? 'en' : 'ja'
   );
@@ -96,12 +76,6 @@ function App() {
       const is_pro = parseInt(params.get('pro') || '0');
       setUser({ email, name, streak, is_pro });
       window.history.replaceState({}, '', '/');
-      
-      // 決済成功パラメーターがあればお祝いする
-      if (params.get('payment') === 'success') {
-        triggerConfetti();
-        alert("Welcome to Pro! 🚀");
-      }
     }
   }, []);
 
@@ -131,7 +105,6 @@ function App() {
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
-  // 課金ページへ遷移
   const handleUpgrade = async () => {
     if (!user) return;
     try {
@@ -149,7 +122,6 @@ function App() {
     }
   };
 
-  // サブスク管理ページへ遷移
   const handlePortal = async () => {
     if (!user) return;
     try {
@@ -163,9 +135,7 @@ function App() {
       if (data.url) {
         window.location.href = data.url;
       } else {
-        // まだ履歴がない場合等はアップグレードを促す
-        alert("サブスクリプション情報が見つかりません。プラン画面へ移動します。");
-        setShowPlanModal(true);
+        alert("管理画面への移動に失敗しました。まだ課金履歴がない可能性があります。");
         setLoading(false);
       }
     } catch (e) {
@@ -175,7 +145,6 @@ function App() {
     }
   };
 
-  // SNSシェア（無料枠回復）
   const handleShare = async () => {
     if (!user) return;
     const text = encodeURIComponent(`ADHDの脳内会議を代行してくれるAIアプリ「Negotiator」を使ってみた！\n#MyNegotiatorApp`);
@@ -194,6 +163,7 @@ function App() {
 
   const sendMessage = async (manualMessage: string | null, action: 'normal' | 'retry' | 'next' = 'normal') => {
     if (action === 'normal' && !manualMessage?.trim()) return;
+    
     if (navigator.vibrate) navigator.vibrate(10);
 
     let newLog = [...chatLog];
@@ -226,6 +196,7 @@ function App() {
       });
       const data = await res.json();
 
+      // ★ 制限チェック
       if (data.limit_reached) {
         setShowLimitModal(true);
         setLoading(false);
@@ -275,7 +246,6 @@ function App() {
     }
   };
 
-  // --- Utility ---
   const triggerConfetti = () => {
     const end = Date.now() + 1000;
     const colors = ['#00FFC2', '#0099FF', '#FF00CC'];
@@ -321,10 +291,7 @@ function App() {
   return (
     <div style={styles.appContainer}>
       
-      {/* ========================================
-        ★ 1. 制限到達モーダル (Limit Modal)
-        ========================================
-      */}
+      {/* 課金誘導モーダル */}
       {showLimitModal && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
@@ -332,15 +299,15 @@ function App() {
             <h2 style={{margin:'0 0 10px 0', color:'#333'}}>Energy Low</h2>
             <p style={{color:'#666', lineHeight:'1.5'}}>
               {lang === 'ja' 
-                ? "無料版の会話上限(1日5回)に達しました。"
-                : "Daily limit reached."}
+                ? "無料版の会話上限(1日5回)に達しました。\nシェアして回復するか、Pro版で無制限に。"
+                : "Daily limit reached.\nShare to reset or Go Pro."}
             </p>
             <div style={{display:'flex', gap:'10px', flexDirection:'column', marginTop:'20px'}}>
               <button onClick={handleShare} style={styles.modalBtnShare}>
                 🐦 Tweet & Reset (Free)
               </button>
-              <button onClick={() => { setShowLimitModal(false); setShowPlanModal(true); }} style={styles.modalBtnPro}>
-                👑 Upgrade to Pro
+              <button onClick={handleUpgrade} style={styles.modalBtnPro}>
+                👑 Upgrade to Pro (Yearly)
               </button>
               <button onClick={() => setShowLimitModal(false)} style={styles.modalBtnClose}>
                 Close
@@ -350,45 +317,6 @@ function App() {
         </div>
       )}
 
-      {/* ========================================
-        ★ 2. プラン提案モーダル (Upgrade / Plan Modal)
-        年額プランを推すデザイン
-        ========================================
-      */}
-      {showPlanModal && (
-        <div style={styles.modalOverlay}>
-          <div style={styles.planCard}>
-            <button onClick={() => setShowPlanModal(false)} style={styles.closeBtnIcon}>×</button>
-            
-            <h2 style={{background: 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize:'1.8rem', marginBottom:'5px'}}>
-              {t.modal_title}
-            </h2>
-            <p style={{color:'#666', marginBottom:'20px', fontSize:'0.9rem'}}>{t.modal_desc}</p>
-            
-            {/* 年額プランのハイライトボックス */}
-            <div style={styles.planHighlightBox}>
-              <div style={styles.planBadge}>{t.plan_yearly_badge}</div>
-              <h3 style={{margin:'10px 0 5px 0', fontSize:'1.2rem'}}>{t.plan_yearly_label}</h3>
-              {/* <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'#333'}}>{t.plan_yearly_price}</div> */}
-              <div style={{fontSize:'0.8rem', color:'#555', marginTop:'5px'}}>
-                 Unlimited Chat / Memory / Custom AI
-              </div>
-            </div>
-
-            <div style={{display:'flex', gap:'10px', flexDirection:'column', marginTop:'20px'}}>
-              <button onClick={handleUpgrade} className="btn-shine" style={styles.planBtnUpgrade}>
-                {t.plan_btn_upgrade} 🚀
-              </button>
-              
-              <button onClick={handlePortal} style={{background:'transparent', border:'none', textDecoration:'underline', color:'#888', cursor:'pointer', fontSize:'0.8rem'}}>
-                {t.plan_btn_restore}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* タイマーオーバーレイ */}
       {timerActive && (
         <div style={styles.timerOverlay}>
           <div style={styles.timerContent}>
@@ -418,10 +346,6 @@ function App() {
         </div>
       )}
 
-      {/* ========================================
-        ★ 3. ヘッダー (ボタン追加)
-        ========================================
-      */}
       <header style={styles.header}>
         <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
           <div style={styles.logoIcon}>⚡</div>
@@ -431,25 +355,18 @@ function App() {
           </div>
         </div>
         
-        <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+        <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
           <button onClick={toggleLang} style={styles.langBtn}>
             {lang === 'ja' ? 'EN' : 'JP'}
           </button>
           
           {user && (
-             <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
-               {/* Proなら「管理」、無料なら「Proへ」を表示 
-               */}
-               {user.is_pro === 1 ? (
-                 <button onClick={handlePortal} style={styles.manageBtn}>
-                   {t.header_manage_btn}
-                 </button>
-               ) : (
-                 <button onClick={() => setShowPlanModal(true)} className="btn-shine" style={styles.proBtn}>
-                   {t.header_pro_btn}
+             <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+               {user.is_pro === 1 && (
+                 <button onClick={handlePortal} style={styles.portalBtn}>
+                   ⚙️ {lang === 'ja' ? '管理' : 'Manage'}
                  </button>
                )}
-
                <div style={styles.streakBox}>
                  <span style={styles.streakLabel}>{t.streak_label}</span>
                  <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
@@ -612,16 +529,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     padding: '5px 10px', fontSize: '0.7rem', borderRadius: '15px', border: '1px solid #ddd',
     background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555'
   },
-  // Proボタン（目立たせる）
-  proBtn: {
-    padding: '6px 12px', fontSize: '0.75rem', borderRadius: '15px', border: 'none',
-    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
-    cursor: 'pointer', fontWeight: 'bold', color: '#333',
-    boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
-    display: 'flex', alignItems: 'center', gap: '4px'
-  },
-  // 管理ボタン（控えめ）
-  manageBtn: {
+  portalBtn: {
     padding: '6px 12px', fontSize: '0.75rem', borderRadius: '15px', border: 'none',
     background: '#eef2f6', cursor: 'pointer', fontWeight: 'bold', color: '#555',
     display: 'flex', alignItems: 'center', gap: '4px'
@@ -684,36 +592,12 @@ const styles: { [key: string]: React.CSSProperties } = {
   timerLabel: { fontSize: '1rem', color: '#888', marginTop: '5px', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: '600' },
   timerCompleteBtn: { marginTop: '60px', background: '#00FFC2', border: 'none', color: '#000', padding: '16px 50px', borderRadius: '50px', fontSize: '1.2rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 0 30px rgba(0, 255, 194, 0.4)', textTransform: 'uppercase', letterSpacing: '1px' },
 
-  // モーダル共通
+  // モーダル用
   modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center' },
   modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
   modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
   modalBtnPro: { background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem', boxShadow: '0 4px 15px rgba(253, 185, 49, 0.4)' },
-  modalBtnClose: { background: 'transparent', border: 'none', color: '#999', padding: '10px', cursor: 'pointer', fontSize: '0.9rem', marginTop: '10px' },
-
-  // ★プラン提案カード（新設）
-  planCard: { 
-    background: 'white', padding: '40px 30px', borderRadius: '24px', maxWidth: '360px', width: '95%', 
-    textAlign: 'center', boxShadow: '0 20px 50px rgba(0,0,0,0.3)', position:'relative' 
-  },
-  planHighlightBox: {
-    background: '#f8f9fa', borderRadius: '16px', padding: '20px', border: '2px solid #667eea',
-    position: 'relative', marginTop: '15px'
-  },
-  planBadge: {
-    position: 'absolute', top: '-12px', left: '50%', transform: 'translateX(-50%)',
-    background: '#FF0055', color: 'white', fontSize: '0.75rem', fontWeight: 'bold',
-    padding: '4px 12px', borderRadius: '20px', boxShadow: '0 4px 10px rgba(255, 0, 85, 0.3)'
-  },
-  planBtnUpgrade: {
-    width: '100%', background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
-    color: '#333', border: 'none', padding: '16px', borderRadius: '14px', fontWeight: '800', 
-    fontSize: '1.1rem', cursor: 'pointer', boxShadow: '0 6px 20px rgba(253, 185, 49, 0.4)'
-  },
-  closeBtnIcon: {
-    position: 'absolute', top: '15px', right: '15px', background: 'transparent', border: 'none',
-    fontSize: '1.5rem', color: '#aaa', cursor: 'pointer', lineHeight: 1
-  }
+  modalBtnClose: { background: 'transparent', border: 'none', color: '#999', padding: '10px', cursor: 'pointer', fontSize: '0.9rem', marginTop: '10px' }
 };
 
 export default App
