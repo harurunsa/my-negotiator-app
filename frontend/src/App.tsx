@@ -306,9 +306,20 @@ function App() {
               <button onClick={handleShare} style={styles.modalBtnShare}>
                 🐦 Tweet & Reset (Free)
               </button>
-              <button onClick={handleUpgrade} style={styles.modalBtnPro}>
+              
+              <div style={{width: '100%', height: '1px', background: '#eee', margin: '5px 0'}}></div>
+            
+              {/* 年額プラン (推し) */}
+              <button onClick={() => handleUpgrade('yearly')} style={styles.modalBtnPro}>
+                <div style={{fontSize: '0.8rem', opacity: 0.9, marginBottom: '2px'}}>✨ 2 Months Free</div>
                 👑 Upgrade to Pro (Yearly)
               </button>
+            
+              {/* 月額プラン (控えめ) */}
+              <button onClick={() => handleUpgrade('monthly')} style={styles.modalBtnMonthly}>
+                or Monthly Plan
+              </button>
+              
               <button onClick={() => setShowLimitModal(false)} style={styles.modalBtnClose}>
                 Close
               </button>
@@ -596,7 +607,35 @@ const styles: { [key: string]: React.CSSProperties } = {
   modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center' },
   modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
   modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
-  modalBtnPro: { background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem', boxShadow: '0 4px 15px rgba(253, 185, 49, 0.4)' },
+  modalBtnPro: { 
+    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
+    color: '#333', 
+    border: '2px solid #fff', // 枠線でリッチに
+    padding: '16px', // 少し大きく
+    borderRadius: '16px', 
+    fontWeight: '800', 
+    cursor: 'pointer', 
+    width: '100%', 
+    fontSize: '1.1rem', 
+    boxShadow: '0 8px 20px rgba(253, 185, 49, 0.5)', // 影を強化
+    transform: 'scale(1.02)', // 最初から少し大きく見せる
+    position: 'relative',
+    overflow: 'hidden'
+  },
+  
+  // 月額ボタン (地味に)
+  modalBtnMonthly: {
+    background: 'transparent',
+    color: '#888',
+    border: '1px solid #ddd',
+    padding: '10px',
+    borderRadius: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    width: '100%',
+    fontSize: '0.9rem',
+    marginTop: '5px'
+  },
   modalBtnClose: { background: 'transparent', border: 'none', color: '#999', padding: '10px', cursor: 'pointer', fontSize: '0.9rem', marginTop: '10px' }
 };
 
