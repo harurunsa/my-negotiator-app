@@ -11,6 +11,8 @@ type Bindings = {
   STRIPE_WEBHOOK_SECRET: string
   STRIPE_PRICE_ID: string
   FRONTEND_URL: string
+  STRIPE_PRICE_ID_YEARLY: string
+  STRIPE_PRICE_ID_MONTHLY: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -284,17 +286,21 @@ app.post('/api/share-recovery', async (c) => {
 // --- ★ Stripe 決済セッション作成 ---
 app.post('/api/checkout', async (c) => {
   try {
-    const { email } = await c.req.json();
+    // plan ('yearly' | 'monthly') を受け取る
+    const { email, plan } = await c.req.json(); 
     const stripe = getStripe(c.env);
     
-    // 既存の顧客IDがあるか確認
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     let customerId = user?.stripe_customer_id;
 
-    // 既にIDがあれば指定、なければ新規作成(emailを渡す)
+    // プランに応じてPrice IDを選択 (デフォルトは年額)
+    const priceId = plan === 'monthly' 
+      ? c.env.STRIPE_PRICE_ID_MONTHLY 
+      : c.env.STRIPE_PRICE_ID_YEARLY;
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
-      line_items: [{ price: c.env.STRIPE_PRICE_ID, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       mode: 'subscription',
       success_url: `${c.env.FRONTEND_URL}/?payment=success`,
       cancel_url: `${c.env.FRONTEND_URL}/?payment=canceled`,
