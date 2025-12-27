@@ -105,14 +105,14 @@ function App() {
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
-  const handleUpgrade = async () => {
+  const handleUpgrade = async (plan: 'yearly' | 'monthly') => { // 引数追加
     if (!user) return;
     try {
       setLoading(true);
       const res = await fetch(`${API_URL}/api/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email })
+        body: JSON.stringify({ email: user.email, plan }) // planを送信
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
