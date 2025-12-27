@@ -23,7 +23,15 @@ const TRANSLATIONS = {
     timer_focus: "FOCUS",
     timer_complete: "Mission Complete",
     system_retry: "😰 ハードルを極限まで下げています...",
-    system_next: "🚀 ナイス！次のステップへ！"
+    system_next: "🚀 ナイス！次のステップへ！",
+    // 追加: 課金周り
+    upgrade_btn: "👑 Proにする (年額)",
+    manage_btn: "⚙️ サブスク管理",
+    pro_badge: "PRO",
+    promo_text: "⚡ Proプランで無制限の思考整理を。\n年額払いで2ヶ月分お得。",
+    limit_title: "本日のエネルギー切れ",
+    limit_desc: "無料版の会話上限(1日5回)に達しました。\nシェアして回復するか、Pro版で無制限に。",
+    share_btn: "🐦 Tweet & Reset (Free)"
   },
   en: {
     logo: "Negotiator",
@@ -42,7 +50,15 @@ const TRANSLATIONS = {
     timer_focus: "FOCUS",
     timer_complete: "Mission Complete",
     system_retry: "😰 Lowering hurdles to the limit...",
-    system_next: "🚀 Nice! Next step!"
+    system_next: "🚀 Nice! Next step!",
+    // 追加: 課金周り
+    upgrade_btn: "👑 Go Pro (Yearly)",
+    manage_btn: "⚙️ Manage Sub",
+    pro_badge: "PRO",
+    promo_text: "⚡ Unlock unlimited thinking with Pro.\nSave 2 months with Yearly billing.",
+    limit_title: "Energy Low",
+    limit_desc: "Daily limit reached.\nShare to reset or Go Pro.",
+    share_btn: "🐦 Tweet & Reset (Free)"
   }
 };
 
@@ -135,12 +151,12 @@ function App() {
       if (data.url) {
         window.location.href = data.url;
       } else {
-        alert("管理画面への移動に失敗しました。まだ課金履歴がない可能性があります。");
+        alert("Billing portal not available yet. Please try again later.");
         setLoading(false);
       }
     } catch (e) {
       console.error(e);
-      alert("エラーが発生しました");
+      alert("Error accessing portal.");
       setLoading(false);
     }
   };
@@ -158,7 +174,7 @@ function App() {
     });
     
     setShowLimitModal(false);
-    alert("回復しました！(Chat Reset)");
+    alert("Recovered! (Chat Reset)");
   };
 
   const sendMessage = async (manualMessage: string | null, action: 'normal' | 'retry' | 'next' = 'normal') => {
@@ -291,23 +307,19 @@ function App() {
   return (
     <div style={styles.appContainer}>
       
-      {/* 課金誘導モーダル */}
+      {/* 制限モーダル */}
       {showLimitModal && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
             <div style={{fontSize:'3rem', marginBottom:'10px'}}>🔋</div>
-            <h2 style={{margin:'0 0 10px 0', color:'#333'}}>Energy Low</h2>
-            <p style={{color:'#666', lineHeight:'1.5'}}>
-              {lang === 'ja' 
-                ? "無料版の会話上限(1日5回)に達しました。\nシェアして回復するか、Pro版で無制限に。"
-                : "Daily limit reached.\nShare to reset or Go Pro."}
-            </p>
+            <h2 style={{margin:'0 0 10px 0', color:'#333'}}>{t.limit_title}</h2>
+            <p style={{color:'#666', lineHeight:'1.5'}}>{t.limit_desc}</p>
             <div style={{display:'flex', gap:'10px', flexDirection:'column', marginTop:'20px'}}>
               <button onClick={handleShare} style={styles.modalBtnShare}>
-                🐦 Tweet & Reset (Free)
+                {t.share_btn}
               </button>
               <button onClick={handleUpgrade} style={styles.modalBtnPro}>
-                👑 Upgrade to Pro (Yearly)
+                {t.upgrade_btn}
               </button>
               <button onClick={() => setShowLimitModal(false)} style={styles.modalBtnClose}>
                 Close
@@ -317,6 +329,7 @@ function App() {
         </div>
       )}
 
+      {/* タイマーオーバーレイ */}
       {timerActive && (
         <div style={styles.timerOverlay}>
           <div style={styles.timerContent}>
@@ -346,12 +359,13 @@ function App() {
         </div>
       )}
 
+      {/* ヘッダー */}
       <header style={styles.header}>
         <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
           <div style={styles.logoIcon}>⚡</div>
           <div>
             <h1 style={styles.logoText}>{t.logo}</h1>
-            {currentGoal && <div className="fade-in" style={styles.goalText}>{t.goal_prefix} {currentGoal}</div>}
+            {user?.is_pro === 1 && <span style={styles.proBadge}>{t.pro_badge}</span>}
           </div>
         </div>
         
@@ -362,11 +376,17 @@ function App() {
           
           {user && (
              <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
-               {user.is_pro === 1 && (
+               {/* ★ ヘッダー内アップグレード・管理ボタン */}
+               {user.is_pro === 1 ? (
                  <button onClick={handlePortal} style={styles.portalBtn}>
-                   ⚙️ {lang === 'ja' ? '管理' : 'Manage'}
+                   {t.manage_btn}
+                 </button>
+               ) : (
+                 <button onClick={handleUpgrade} className="pulse-button" style={styles.headerUpgradeBtn}>
+                   {t.upgrade_btn}
                  </button>
                )}
+
                <div style={styles.streakBox}>
                  <span style={styles.streakLabel}>{t.streak_label}</span>
                  <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
@@ -376,6 +396,7 @@ function App() {
         </div>
       </header>
 
+      {/* ランディング or チャット */}
       {!user ? (
         <div style={styles.landingContainer}>
            <div style={styles.landingContent}>
@@ -395,13 +416,22 @@ function App() {
       ) : (
         <div style={styles.chatContainer}>
           <div style={styles.chatScrollArea}>
+            {/* Empty State */}
             {chatLog.length === 0 && (
               <div className="fade-in" style={styles.emptyState}>
                 <div style={{fontSize: '3rem', marginBottom: '20px'}}>{t.empty_icon}</div>
-                <p style={{whiteSpace:'pre-line'}}>{t.empty_text}</p>
+                <p style={{whiteSpace:'pre-line', marginBottom:'30px'}}>{t.empty_text}</p>
+                
+                {/* ★ 空の状態でのプロモーションカード */}
+                {user.is_pro === 0 && (
+                  <div style={styles.promoCard} onClick={handleUpgrade}>
+                    <p style={{margin:0, fontWeight:'bold', fontSize:'0.9rem'}}>{t.promo_text}</p>
+                  </div>
+                )}
               </div>
             )}
             
+            {/* チャットログ */}
             {chatLog.map((log, i) => (
               <div key={i} style={{ 
                 ...styles.messageRow, 
@@ -454,6 +484,7 @@ function App() {
             <div ref={chatEndRef} />
           </div>
 
+          {/* 入力エリア */}
           <div style={styles.inputArea}>
             <input 
               value={input}
@@ -523,21 +554,45 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   logoIcon: { fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' },
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
-  goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  proBadge: { 
+    fontSize: '0.6rem', background: '#000', color: '#fff', padding: '2px 6px', 
+    borderRadius: '8px', marginLeft: '6px', verticalAlign: 'middle', fontWeight: 'bold' 
+  },
   
   langBtn: {
     padding: '5px 10px', fontSize: '0.7rem', borderRadius: '15px', border: '1px solid #ddd',
     background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555'
   },
-  portalBtn: {
-    padding: '6px 12px', fontSize: '0.75rem', borderRadius: '15px', border: 'none',
-    background: '#eef2f6', cursor: 'pointer', fontWeight: 'bold', color: '#555',
-    display: 'flex', alignItems: 'center', gap: '4px'
+  // ヘッダー内のアップグレードボタン
+  headerUpgradeBtn: {
+    padding: '8px 12px', fontSize: '0.75rem', borderRadius: '20px', border: 'none',
+    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', // ゴールド
+    color: '#333', cursor: 'pointer', fontWeight: 'bold', 
+    boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
+    whiteSpace: 'nowrap'
   },
+  // ヘッダー内の管理ボタン
+  portalBtn: {
+    padding: '8px 12px', fontSize: '0.75rem', borderRadius: '20px', border: 'none',
+    background: '#eef2f6', cursor: 'pointer', fontWeight: 'bold', color: '#555',
+    display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap'
+  },
+  
   streakBox: { textAlign: 'right' },
   streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
   streakValue: { fontSize: '1.4rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
   
+  // プロモーションカード (Empty State用)
+  promoCard: {
+    background: 'linear-gradient(135deg, #FFF8E1 0%, #FFECB3 100%)',
+    border: '1px solid #FFE082',
+    color: '#6F4E00',
+    padding: '12px 20px', borderRadius: '16px',
+    cursor: 'pointer', maxWidth: '300px', margin: '0 auto',
+    boxShadow: '0 4px 15px rgba(255, 215, 0, 0.2)',
+    transition: 'transform 0.2s ease'
+  },
+
   landingContainer: { 
     flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center',
     background: '#0F172A', color: '#fff', position: 'relative', overflow: 'hidden'
