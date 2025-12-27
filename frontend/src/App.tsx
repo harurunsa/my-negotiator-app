@@ -47,7 +47,7 @@ const TRANSLATIONS = {
 };
 
 function App() {
-  const [user, setUser] = useState<{email: string, name: string, streak: number, is_pro: number} | null>(null);
+  const [user, setUser] = useState<{email: string, name: string, streak: number, is_pro: number, usage_count?: number} | null>(null);
   const [input, setInput] = useState("");
   const [chatLog, setChatLog] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -74,7 +74,7 @@ function App() {
       const name = params.get('name') || "";
       const streak = parseInt(params.get('streak') || '0');
       const is_pro = parseInt(params.get('pro') || '0');
-      setUser({ email, name, streak, is_pro });
+      setUser({ email, name, streak, is_pro, usage_count: 0 });
       window.history.replaceState({}, '', '/');
     }
   }, []);
@@ -105,7 +105,7 @@ function App() {
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
-  const handleUpgrade = async (plan: 'yearly' | 'monthly') => { // 引数追加
+  const handleUpgrade = async (plan: 'yearly' | 'monthly') => {
     if (!user) return;
     try {
       setLoading(true);
@@ -291,16 +291,20 @@ function App() {
   return (
     <div style={styles.appContainer}>
       
-      {/* 課金誘導モーダル */}
+      {/* 課金・制限モーダル */}
       {showLimitModal && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
-            <div style={{fontSize:'3rem', marginBottom:'10px'}}>🔋</div>
-            <h2 style={{margin:'0 0 10px 0', color:'#333'}}>Energy Low</h2>
+            <div style={{fontSize:'3rem', marginBottom:'10px'}}>
+              {(user?.usage_count ?? 0) >= 5 ? "🔋" : "🚀"}
+            </div>
+            <h2 style={{margin:'0 0 10px 0', color:'#333'}}>
+              {(user?.usage_count ?? 0) >= 5 ? "Energy Low" : "Unlock Potential"}
+            </h2>
             <p style={{color:'#666', lineHeight:'1.5'}}>
               {lang === 'ja' 
-                ? "無料版の会話上限(1日5回)に達しました。\nシェアして回復するか、Pro版で無制限に。"
-                : "Daily limit reached.\nShare to reset or Go Pro."}
+                ? "Proプランで無制限の脳内会議を。\n年額プランなら2ヶ月分無料です！"
+                : "Unlimited access with Pro.\nGet 2 months free with Yearly plan!"}
             </p>
             <div style={{display:'flex', gap:'10px', flexDirection:'column', marginTop:'20px'}}>
               <button onClick={handleShare} style={styles.modalBtnShare}>
@@ -308,13 +312,13 @@ function App() {
               </button>
               
               <div style={{width: '100%', height: '1px', background: '#eee', margin: '5px 0'}}></div>
-            
+
               {/* 年額プラン (推し) */}
               <button onClick={() => handleUpgrade('yearly')} style={styles.modalBtnPro}>
                 <div style={{fontSize: '0.8rem', opacity: 0.9, marginBottom: '2px'}}>✨ 2 Months Free</div>
                 👑 Upgrade to Pro (Yearly)
               </button>
-            
+
               {/* 月額プラン (控えめ) */}
               <button onClick={() => handleUpgrade('monthly')} style={styles.modalBtnMonthly}>
                 or Monthly Plan
@@ -373,9 +377,14 @@ function App() {
           
           {user && (
              <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
-               {user.is_pro === 1 && (
+               {/* Proなら管理ボタン、Freeならアップグレードボタンを表示 */}
+               {user.is_pro === 1 ? (
                  <button onClick={handlePortal} style={styles.portalBtn}>
                    ⚙️ {lang === 'ja' ? '管理' : 'Manage'}
+                 </button>
+               ) : (
+                 <button onClick={() => setShowLimitModal(true)} style={styles.upgradeHeaderBtn}>
+                   👑 Upgrade
                  </button>
                )}
                <div style={styles.streakBox}>
@@ -545,6 +554,23 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: '#eef2f6', cursor: 'pointer', fontWeight: 'bold', color: '#555',
     display: 'flex', alignItems: 'center', gap: '4px'
   },
+  // ヘッダー用アップグレードボタン
+  upgradeHeaderBtn: {
+    padding: '6px 12px',
+    fontSize: '0.8rem',
+    borderRadius: '20px',
+    border: 'none',
+    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)',
+    color: '#333',
+    cursor: 'pointer',
+    fontWeight: '800',
+    boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    transition: 'transform 0.2s'
+  },
+
   streakBox: { textAlign: 'right' },
   streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
   streakValue: { fontSize: '1.4rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
@@ -607,18 +633,20 @@ const styles: { [key: string]: React.CSSProperties } = {
   modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center' },
   modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
   modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
+  
+  // 年額ボタン (さらに強調)
   modalBtnPro: { 
     background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
     color: '#333', 
-    border: '2px solid #fff', // 枠線でリッチに
-    padding: '16px', // 少し大きく
+    border: '2px solid #fff', 
+    padding: '16px', 
     borderRadius: '16px', 
     fontWeight: '800', 
     cursor: 'pointer', 
     width: '100%', 
     fontSize: '1.1rem', 
-    boxShadow: '0 8px 20px rgba(253, 185, 49, 0.5)', // 影を強化
-    transform: 'scale(1.02)', // 最初から少し大きく見せる
+    boxShadow: '0 8px 20px rgba(253, 185, 49, 0.5)', 
+    transform: 'scale(1.02)', 
     position: 'relative',
     overflow: 'hidden'
   },
@@ -636,6 +664,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '0.9rem',
     marginTop: '5px'
   },
+  
   modalBtnClose: { background: 'transparent', border: 'none', color: '#999', padding: '10px', cursor: 'pointer', fontSize: '0.9rem', marginTop: '10px' }
 };
 
