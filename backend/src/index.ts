@@ -17,30 +17,29 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
-// --- 定数 & アーキタイプ定義 ---
 const DAILY_LIMIT = 5;
 
-// ★ 5つの人格アーキタイプ（原型）
+// ★変更: プロンプトに「短さ」を徹底させる指示を追加
 const ARCHETYPES = {
   empathy: {
     label: "The Empathic Counselor",
-    prompt: "Tone: Highly empathetic, warm, validation-heavy. Focus on emotional safety. Use soft language. Acknowledge difficulty before suggesting solutions."
+    prompt: "Tone: Warm, soft, soothing. [CONSTRAINT]: Max 3 sentences. Focus ONLY on the very first tiny step. Do not give a full plan."
   },
   logic: {
     label: "The Logical Analyst",
-    prompt: "Tone: Robotic, precise, data-driven. No emotional fluff. Focus on efficiency, physics, and logical breakdown. Use bullet points and numbers."
+    prompt: "Tone: Precise, efficient. [CONSTRAINT]: Max 3 sentences. Output only the immediate next physical action. No bullet points of future steps."
   },
   game: {
     label: "The Game Master",
-    prompt: "Tone: Gamified, adventurous, fun. Treat tasks as 'Quests' or 'Missions'. Use RPG terminology (EXP, Boss, Loot). High energy but playful."
+    prompt: "Tone: Playful, RPG-style. [CONSTRAINT]: Max 3 sentences. Treat the next step as a 'Mini Quest'. Keep it short and punchy."
   },
   passion: {
     label: "The Passionate Coach",
-    prompt: "Tone: High energy, motivational, slightly aggressive (in a good way). Use exclamation marks! Push the user! 'You can do it!' 'Don't give up!'"
+    prompt: "Tone: Hot, energetic! [CONSTRAINT]: Max 3 sentences. Push for immediate action! 'Just do this one thing!'"
   },
   minimal: {
     label: "The Minimalist",
-    prompt: "Tone: Extremely concise. Use fewer than 20 words. No greetings. Just the actionable step. Low cognitive load."
+    prompt: "Tone: Robot. [CONSTRAINT]: Max 15 words. State the action only."
   }
 };
 
@@ -48,7 +47,6 @@ type ArchetypeKey = keyof typeof ARCHETYPES;
 
 const getStripe = (env: Bindings) => new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' as any });
 
-// --- ヘルパー関数 ---
 function extractJson(text: string): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -56,7 +54,7 @@ function extractJson(text: string): string {
   return text.substring(start, end + 1);
 }
 
-// --- 認証周り ---
+// --- 認証周り (変更なし) ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -97,24 +95,21 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- AIチャット (最適化版: Gemini 2.5 Flash Lite + Bandit Algo) ---
+// --- AIチャット ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     
-    // ユーザー取得
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
-    // 日付変更チェックと回数リセット
     const today = new Date().toISOString().split('T')[0];
     if (user.last_usage_date !== today) {
       await c.env.DB.prepare("UPDATE users SET usage_count = 0, last_usage_date = ? WHERE email = ?").bind(today, email).run();
       user.usage_count = 0;
     }
 
-    // 制限チェック
     if (!user.is_pro && user.usage_count >= DAILY_LIMIT) {
       return c.json({ 
         limit_reached: true, 
@@ -128,41 +123,36 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- ★ バンディットアルゴリズム (Epsilon-Greedy) ---
+    // バンディットアルゴリズム (変更なし)
     const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
-    const epsilon = 0.2; // 20%の確率で「冒険（探索）」する
-    let selectedKey: ArchetypeKey = 'empathy'; // デフォルト
-
-    // 1. 各スタイルの勝率を計算
+    const epsilon = 0.2;
+    let selectedKey: ArchetypeKey = 'empathy';
     let bestKey: ArchetypeKey = 'empathy';
     let bestRate = -1;
 
     Object.keys(ARCHETYPES).forEach((key) => {
       const k = key as ArchetypeKey;
       const stat = styleStats[k] || { wins: 0, total: 0 };
-      const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total; // 未試行は0.5扱い
+      const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
       if (rate > bestRate) {
         bestRate = rate;
         bestKey = k;
       }
     });
 
-    // 2. 選択ロジック
     if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
-      // 探索: ランダムに選ぶ
       const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
       selectedKey = keys[Math.floor(Math.random() * keys.length)];
     } else {
-      // 活用: 今一番成績が良いものを選ぶ
       selectedKey = bestKey;
     }
 
     const archetype = ARCHETYPES[selectedKey];
     const userMemory = user.memory || "";
 
-    // --- Gemini 2.5 Flash Lite 呼び出し (1回のみ) ---
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
+    // ★変更: システムプロンプトで「短さ」と「会話」を強制
     const systemInstruction = `
       You are an Executive Function Augmentation AI for ADHD.
       
@@ -172,18 +162,21 @@ app.post('/api/chat', async (c) => {
       [User Memory]: ${userMemory}
       [Language]: Reply in ${lang === 'en' ? 'English' : 'Japanese'}.
       
-      ${current_goal ? `[GOAL]: ${current_goal} (Stay focused on this!)` : "Infer the user's goal from context."}
+      [CRITICAL RULES]:
+      1. **KEEP IT SHORT**. Maximum 2-3 sentences.
+      2. **ONE STEP ONLY**. Do not give a list. Do not plan the whole project. Give only the *very first, smallest* physical step.
+      3. **CONVERSATIONAL**. Talk *to* the user, not *at* them. Ask a simple question or give a simple command.
       
-      ${action === 'retry' ? "PREVIOUS ATTEMPT FAILED. The task was too big or tone was wrong. Apologize sincerely. Make the task physically smaller (atomic)." : ""}
-      ${action === 'next' ? "KEEP THE MOMENTUM. Praise shortly and provide the next step immediately." : ""}
-
-      IMPORTANT: Do not just output the template. Adapt the instruction dynamically to the user's input.
+      ${current_goal ? `[GOAL]: ${current_goal}` : "Infer goal."}
       
-      [OUTPUT RULES]: Output JSON ONLY.
+      ${action === 'retry' ? "PREVIOUS WAS TOO HARD. Make it tinier. Apologize." : ""}
+      ${action === 'next' ? "User did it! Praise and give the NEXT small step." : ""}
+      
+      [OUTPUT JSON ONLY]:
       {
-        "reply": "The actual response text to user",
-        "timer_seconds": Integer (recommended timer duration, default 180),
-        "detected_goal": "Goal string or null",
+        "reply": "Short response text",
+        "timer_seconds": Integer,
+        "detected_goal": "Goal string",
         "used_archetype": "${selectedKey}" 
       }
     `;
@@ -192,9 +185,7 @@ app.post('/api/chat', async (c) => {
 
     let result = null;
     let retryCount = 0;
-    const maxRetries = 2;
-
-    while (retryCount < maxRetries) {
+    while (retryCount < 2) {
       try {
         const response = await fetch(url, {
           method: 'POST',
@@ -207,30 +198,21 @@ app.post('/api/chat', async (c) => {
 
         const data: any = await response.json();
         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        const cleanedText = extractJson(rawText);
-        result = JSON.parse(cleanedText);
-
+        result = JSON.parse(extractJson(rawText));
         if (result.reply) break;
-      } catch (e) {
-        retryCount++;
-      }
+      } catch (e) { retryCount++; }
     }
 
     if (!result) {
       result = {
-        reply: lang === 'en' 
-          ? "Sorry, connection glitch! Let's just focus on the task: Take one deep breath." 
-          : "通信が少し不安定です！でも大丈夫、まずは深呼吸を一つしましょう。",
+        reply: "通信エラーです。もう一度深呼吸して、リラックスしましょう。",
         timer_seconds: 60,
         detected_goal: current_goal,
         used_archetype: selectedKey
       };
     }
-
-    // resultに確実にused_archetypeを含める
     result.used_archetype = selectedKey;
 
-    // 記憶更新 (非同期)
     if ((action === 'normal' || action === 'next') && result.reply) {
       c.executionCtx.waitUntil((async () => {
         try {
@@ -242,50 +224,31 @@ app.post('/api/chat', async (c) => {
           });
           const memData: any = await memRes.json();
           const newMemory = memData.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (newMemory) {
-            await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMemory, email).run();
-          }
-        } catch (err) { console.error(err); }
+          if (newMemory) await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMemory, email).run();
+        } catch (err) {}
       })());
     }
 
     return c.json(result);
-
   } catch (e: any) {
-    return c.json({ 
-      reply: `System Error: ${e.message}`, 
-      timer_seconds: 0 
-    });
+    return c.json({ reply: `System Error: ${e.message}`, timer_seconds: 0 });
   }
 })
 
-// --- フィードバック (強化学習の更新) ---
+// --- その他API (変更なし) ---
 app.post('/api/feedback', async (c) => {
   const { email, used_archetype, is_success } = await c.req.json();
   try {
-    // 統計データとストリークを取得
     const user: any = await c.env.DB.prepare("SELECT style_stats, streak FROM users WHERE email = ?").bind(email).first();
-    
     let stats = user.style_stats ? JSON.parse(user.style_stats) : {};
-    
-    // 該当アーキタイプの統計を初期化
     if (!stats[used_archetype]) stats[used_archetype] = { wins: 0, total: 0 };
-    
-    // 統計更新
     stats[used_archetype].total += 1;
-    if (is_success) {
-      stats[used_archetype].wins += 1;
-    }
-
-    // DB更新
-    await c.env.DB.prepare("UPDATE users SET style_stats = ?, streak = streak + ? WHERE email = ?")
-      .bind(JSON.stringify(stats), is_success ? 1 : 0, email).run();
-
+    if (is_success) stats[used_archetype].wins += 1;
+    await c.env.DB.prepare("UPDATE users SET style_stats = ?, streak = streak + ? WHERE email = ?").bind(JSON.stringify(stats), is_success ? 1 : 0, email).run();
     return c.json({ streak: user.streak + (is_success ? 1 : 0) });
   } catch (e) { return c.json({ error: "DB Error" }, 500); }
 });
 
-// --- SNSシェアでの回復 ---
 app.post('/api/share-recovery', async (c) => {
   try {
     const { email } = await c.req.json();
@@ -294,17 +257,13 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
-// --- Stripe 決済セッション作成 ---
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
     const stripe = getStripe(c.env);
-    
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     let customerId = user?.stripe_customer_id;
-
     const priceId = plan === 'monthly' ? c.env.STRIPE_PRICE_ID_MONTHLY : c.env.STRIPE_PRICE_ID_YEARLY;
-
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
@@ -315,70 +274,41 @@ app.post('/api/checkout', async (c) => {
       customer_email: customerId ? undefined : email,
       metadata: { email }
     });
-
     return c.json({ url: session.url });
-  } catch(e: any) {
-    return c.json({ error: e.message }, 500);
-  }
+  } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// --- サブスク管理ポータル ---
 app.post('/api/portal', async (c) => {
   try {
     const { email } = await c.req.json();
     const stripe = getStripe(c.env);
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
-
-    if (!user || !user.stripe_customer_id) {
-      return c.json({ error: "No billing information found" }, 404);
-    }
-
-    const session = await stripe.billingPortal.sessions.create({
-      customer: user.stripe_customer_id,
-      return_url: c.env.FRONTEND_URL,
-    });
-
+    if (!user || !user.stripe_customer_id) return c.json({ error: "No billing information found" }, 404);
+    const session = await stripe.billingPortal.sessions.create({ customer: user.stripe_customer_id, return_url: c.env.FRONTEND_URL });
     return c.json({ url: session.url });
-  } catch (e: any) {
-    return c.json({ error: e.message }, 500);
-  }
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// --- Stripe Webhook ---
 app.post('/api/webhook', async (c) => {
   const stripe = getStripe(c.env);
   const signature = c.req.header('stripe-signature');
   const body = await c.req.text();
-
   let event;
   try {
     if (!signature) throw new Error("No signature");
     event = await stripe.webhooks.constructEventAsync(body, signature, c.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err: any) {
-    return c.text(`Webhook Error: ${err.message}`, 400);
-  }
-
+  } catch (err: any) { return c.text(`Webhook Error: ${err.message}`, 400); }
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.metadata?.email || session.customer_details?.email;
     const customerId = session.customer as string;
-    
-    if (email && customerId) {
-      await c.env.DB.prepare(
-        "UPDATE users SET is_pro = 1, stripe_customer_id = ? WHERE email = ?"
-      ).bind(customerId, email).run();
-    }
+    if (email && customerId) await c.env.DB.prepare("UPDATE users SET is_pro = 1, stripe_customer_id = ? WHERE email = ?").bind(customerId, email).run();
   }
-
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object as Stripe.Subscription;
     const customerId = subscription.customer as string;
-    
-    await c.env.DB.prepare(
-      "UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?"
-    ).bind(customerId).run();
+    await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?").bind(customerId).run();
   }
-
   return c.text('Received', 200);
 });
 
