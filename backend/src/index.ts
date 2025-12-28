@@ -19,7 +19,7 @@ app.use('/*', cors())
 
 const DAILY_LIMIT = 5;
 
-// ★変更: プロンプトに「短さ」を徹底させる指示を追加
+// ★変更: プロンプトに「短さ」を徹底させる制約(CONSTRAINT)を追加
 const ARCHETYPES = {
   empathy: {
     label: "The Empathic Counselor",
@@ -54,7 +54,7 @@ function extractJson(text: string): string {
   return text.substring(start, end + 1);
 }
 
-// --- 認証周り (変更なし) ---
+// --- 認証周り ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -123,7 +123,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // バンディットアルゴリズム (変更なし)
+    // バンディットアルゴリズム (最適化ロジック)
     const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
     const epsilon = 0.2;
     let selectedKey: ArchetypeKey = 'empathy';
@@ -150,6 +150,7 @@ app.post('/api/chat', async (c) => {
     const archetype = ARCHETYPES[selectedKey];
     const userMemory = user.memory || "";
 
+    // 高速モデルを使用
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
     // ★変更: システムプロンプトで「短さ」と「会話」を強制
@@ -163,7 +164,7 @@ app.post('/api/chat', async (c) => {
       [Language]: Reply in ${lang === 'en' ? 'English' : 'Japanese'}.
       
       [CRITICAL RULES]:
-      1. **KEEP IT SHORT**. Maximum 2-3 sentences.
+      1. **KEEP IT SHORT**. Maximum 2-3 sentences. Do not write a wall of text.
       2. **ONE STEP ONLY**. Do not give a list. Do not plan the whole project. Give only the *very first, smallest* physical step.
       3. **CONVERSATIONAL**. Talk *to* the user, not *at* them. Ask a simple question or give a simple command.
       
@@ -235,7 +236,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// --- その他API (変更なし) ---
+// --- その他API ---
 app.post('/api/feedback', async (c) => {
   const { email, used_archetype, is_success } = await c.req.json();
   try {
