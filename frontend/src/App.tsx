@@ -543,6 +543,25 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'rgba(247, 249, 252, 0.9)', backdropFilter: 'blur(10px)',
     borderBottom: '1px solid rgba(0,0,0,0.03)'
   },
+  
+  chatContainer: { 
+    flex: 1, 
+    display: 'flex', 
+    flexDirection: 'column', 
+    paddingTop: '70px',
+    minHeight: 0, // ★重要: これがないとスクロール領域が潰れることがある
+    position: 'relative'
+  }, 
+  chatScrollArea: { 
+    flex: 1, 
+    overflowY: 'auto', 
+    padding: '0 15px 20px 15px', 
+    display: 'flex', 
+    flexDirection: 'column', 
+    gap: '20px',
+    scrollBehavior: 'smooth' // ★追加: スクロールを滑らかに
+  },
+  
   logoIcon: { fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' },
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
   goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
