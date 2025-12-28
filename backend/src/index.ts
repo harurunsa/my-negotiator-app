@@ -17,23 +17,38 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
+// --- 定数 & アーキタイプ定義 ---
 const DAILY_LIMIT = 5;
 
-// --- 初期人格シード (ここから進化する) ---
-const INITIAL_PERSONA = "あなたはADHDの脳特性をハックするパートナーです。基本方針: 1. 提案は極限まで小さく。 2. ユーザーを責めない。 3. ゲームのように楽しく。";
-
-// --- メッセージ定義 ---
-const MESSAGES = {
-  ja: {
-    limit_reached: "無料版の制限に達しました。シェアして回復するか、Proプランで制限解除してください！"
+// ★ 5つの人格アーキタイプ（原型）
+const ARCHETYPES = {
+  empathy: {
+    label: "The Empathic Counselor",
+    prompt: "Tone: Highly empathetic, warm, validation-heavy. Focus on emotional safety. Use soft language. Acknowledge difficulty before suggesting solutions."
   },
-  en: {
-    limit_reached: "Free limit reached. Share to reset or Upgrade!"
+  logic: {
+    label: "The Logical Analyst",
+    prompt: "Tone: Robotic, precise, data-driven. No emotional fluff. Focus on efficiency, physics, and logical breakdown. Use bullet points and numbers."
+  },
+  game: {
+    label: "The Game Master",
+    prompt: "Tone: Gamified, adventurous, fun. Treat tasks as 'Quests' or 'Missions'. Use RPG terminology (EXP, Boss, Loot). High energy but playful."
+  },
+  passion: {
+    label: "The Passionate Coach",
+    prompt: "Tone: High energy, motivational, slightly aggressive (in a good way). Use exclamation marks! Push the user! 'You can do it!' 'Don't give up!'"
+  },
+  minimal: {
+    label: "The Minimalist",
+    prompt: "Tone: Extremely concise. Use fewer than 20 words. No greetings. Just the actionable step. Low cognitive load."
   }
 };
 
+type ArchetypeKey = keyof typeof ARCHETYPES;
+
 const getStripe = (env: Bindings) => new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' as any });
 
+// --- ヘルパー関数 ---
 function extractJson(text: string): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -41,7 +56,7 @@ function extractJson(text: string): string {
   return text.substring(start, end + 1);
 }
 
-// 認証周り (変更なし)
+// --- 認証周り ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -82,205 +97,288 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- 進化型AIチャット ---
+// --- AIチャット (最適化版: Gemini 2.5 Flash Lite + Bandit Algo) ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
-    const t = (MESSAGES as any)[lang] || MESSAGES.ja;
     
+    // ユーザー取得
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
-    // 回数制限チェック
+    // 日付変更チェックと回数リセット
     const today = new Date().toISOString().split('T')[0];
     if (user.last_usage_date !== today) {
       await c.env.DB.prepare("UPDATE users SET usage_count = 0, last_usage_date = ? WHERE email = ?").bind(today, email).run();
       user.usage_count = 0;
     }
+
+    // 制限チェック
     if (!user.is_pro && user.usage_count >= DAILY_LIMIT) {
-      return c.json({ limit_reached: true, reply: t.limit_reached });
+      return c.json({ 
+        limit_reached: true, 
+        reply: lang === 'ja' 
+          ? "無料版の制限に達しました。SNSシェアで回復するか、Proプランにアップグレードしてください！"
+          : "Free limit reached. Share to reset or Upgrade!"
+      });
     }
+
     if (action === 'normal') {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- ★ここから自己進化ロジック ---
-    
-    // 現在の「最強の指示書」を取得 (なければ初期値)
-    let currentStyleInstruction = user.current_best_style || INITIAL_PERSONA;
-    const userMemory = user.memory || "特になし";
+    // --- ★ バンディットアルゴリズム (Epsilon-Greedy) ---
+    const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
+    const epsilon = 0.2; // 20%の確率で「冒険（探索）」する
+    let selectedKey: ArchetypeKey = 'empathy'; // デフォルト
 
-    // アクションに応じた戦略指示
-    let dynamicContext = "";
-    if (action === 'retry') {
-      dynamicContext = `
-        [CRITICAL UPDATE]: The user REJECTED your previous proposal ("${prev_context}"). 
-        Your current style might be annoying or the task was too big.
-        STRATEGY CHANGE: Apologize briefly. Drastically LOWER the hurdle. Suggest a physical action taking less than 2 seconds.
-        MUTATION: You MUST change your tone. If you were energetic, be calm. If you were strict, be kind.
-      `;
-    } else if (action === 'next') {
-      dynamicContext = `
-        [STATUS]: Success! The user completed the task.
-        STRATEGY: Keep the momentum. Give a short, high-dopamine praise. Immediately suggest the next micro-step.
-        MUTATION: Reinforce the current successful tone but make it slightly more confident.
-      `;
+    // 1. 各スタイルの勝率を計算
+    let bestKey: ArchetypeKey = 'empathy';
+    let bestRate = -1;
+
+    Object.keys(ARCHETYPES).forEach((key) => {
+      const k = key as ArchetypeKey;
+      const stat = styleStats[k] || { wins: 0, total: 0 };
+      const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total; // 未試行は0.5扱い
+      if (rate > bestRate) {
+        bestRate = rate;
+        bestKey = k;
+      }
+    });
+
+    // 2. 選択ロジック
+    if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
+      // 探索: ランダムに選ぶ
+      const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
+      selectedKey = keys[Math.floor(Math.random() * keys.length)];
     } else {
-      dynamicContext = `
-        [STATUS]: New conversation or continuation.
-        STRATEGY: Identify the user's goal. Break it down into the first step.
-        MUTATION: Based on past memory, try to optimize the tone for this specific user.
-      `;
+      // 活用: 今一番成績が良いものを選ぶ
+      selectedKey = bestKey;
     }
 
-    // Geminiへのメタプロンプト (指示書自体を進化させる)
-    const systemPrompt = `
-      You are an "AI Persona Optimizer". Your job is twofold:
-      1. Reply to the user to help them execute tasks (ADHD support).
-      2. ANALYZE the interaction and EVOLVE your own "Persona Instruction" for the next turn.
+    const archetype = ARCHETYPES[selectedKey];
+    const userMemory = user.memory || "";
 
-      [Current Persona Instruction]: "${currentStyleInstruction}"
-      [User Memory]: "${userMemory}"
-      [Current Context]: ${dynamicContext}
-      [User Input]: "${message}"
-      [Goal]: "${current_goal || 'Unknown'}"
-      [Language]: ${lang === 'en' ? 'English' : 'Japanese'}
+    // --- Gemini 2.5 Flash Lite 呼び出し (1回のみ) ---
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
+    
+    const systemInstruction = `
+      You are an Executive Function Augmentation AI for ADHD.
+      
+      [CURRENT STRATEGY]: "${archetype.label}"
+      [STRATEGY INSTRUCTION]: ${archetype.prompt}
+      
+      [User Memory]: ${userMemory}
+      [Language]: Reply in ${lang === 'en' ? 'English' : 'Japanese'}.
+      
+      ${current_goal ? `[GOAL]: ${current_goal} (Stay focused on this!)` : "Infer the user's goal from context."}
+      
+      ${action === 'retry' ? "PREVIOUS ATTEMPT FAILED. The task was too big or tone was wrong. Apologize sincerely. Make the task physically smaller (atomic)." : ""}
+      ${action === 'next' ? "KEEP THE MOMENTUM. Praise shortly and provide the next step immediately." : ""}
 
-      REQUIRED OUTPUT FORMAT (JSON only):
+      IMPORTANT: Do not just output the template. Adapt the instruction dynamically to the user's input.
+      
+      [OUTPUT RULES]: Output JSON ONLY.
       {
-        "reply": "Your message to the user (Keep it short, max 2-3 sentences).",
-        "new_style_instruction": "A REVISED, detailed instruction for YOURSELF to use next time. Based on this interaction, refine the tone, sentence length, and attitude. If the user rejected ('retry'), change this instruction drastically.",
-        "detected_goal": "The inferred user goal",
-        "timer_seconds": 180 (integer, suggested timer duration)
+        "reply": "The actual response text to user",
+        "timer_seconds": Integer (recommended timer duration, default 180),
+        "detected_goal": "Goal string or null",
+        "used_archetype": "${selectedKey}" 
       }
     `;
 
-    // モデル呼び出し (Liteモデル推奨)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${apiKey}`;
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
-        generationConfig: { response_mime_type: "application/json" }
-      })
-    });
+    const requestText = action === 'normal' ? `User: ${message}` : `(System Trigger: ${action})`;
 
-    const data: any = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    const result = JSON.parse(extractJson(rawText));
+    let result = null;
+    let retryCount = 0;
+    const maxRetries = 2;
 
-    // --- ★進化の保存 ---
-    // AIが自分で考え出した「新しい指示書 (new_style_instruction)」をDBに上書き保存する
-    if (result.new_style_instruction && result.new_style_instruction.length > 10) {
-      c.executionCtx.waitUntil(
-        c.env.DB.prepare("UPDATE users SET current_best_style = ? WHERE email = ?")
-          .bind(result.new_style_instruction, email).run()
-      );
+    while (retryCount < maxRetries) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\n" + requestText }] }],
+            generationConfig: { response_mime_type: "application/json" }
+          })
+        });
+
+        const data: any = await response.json();
+        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const cleanedText = extractJson(rawText);
+        result = JSON.parse(cleanedText);
+
+        if (result.reply) break;
+      } catch (e) {
+        retryCount++;
+      }
     }
 
-    // 記憶の更新 (非同期)
-    if (result.reply) {
+    if (!result) {
+      result = {
+        reply: lang === 'en' 
+          ? "Sorry, connection glitch! Let's just focus on the task: Take one deep breath." 
+          : "通信が少し不安定です！でも大丈夫、まずは深呼吸を一つしましょう。",
+        timer_seconds: 60,
+        detected_goal: current_goal,
+        used_archetype: selectedKey
+      };
+    }
+
+    // resultに確実にused_archetypeを含める
+    result.used_archetype = selectedKey;
+
+    // 記憶更新 (非同期)
+    if ((action === 'normal' || action === 'next') && result.reply) {
       c.executionCtx.waitUntil((async () => {
         try {
-          const memPrompt = `Update user memory concisely. Old: ${userMemory}. User: ${message}. AI: ${result.reply}.`;
+          const memoryPrompt = `Update user profile based on: User="${message}" / AI="${result.reply}". Keep it concise.`;
           const memRes = await fetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: memPrompt }] }] })
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: memoryPrompt }] }] })
           });
           const memData: any = await memRes.json();
-          const newMem = memData.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (newMem) await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMem, email).run();
-        } catch(e) {}
+          const newMemory = memData.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (newMemory) {
+            await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMemory, email).run();
+          }
+        } catch (err) { console.error(err); }
       })());
     }
 
-    return c.json({
-      reply: result.reply,
-      timer_seconds: result.timer_seconds || 180,
-      detected_goal: result.detected_goal,
-      // デバッグ用に現在のスタイルを返すことも可能
-      used_style: currentStyleInstruction 
-    });
+    return c.json(result);
 
   } catch (e: any) {
-    return c.json({ reply: `Error: ${e.message}`, timer_seconds: 0 });
+    return c.json({ 
+      reply: `System Error: ${e.message}`, 
+      timer_seconds: 0 
+    });
   }
 })
 
-// フィードバックなどの他APIは変更なし (stripe系含む)
+// --- フィードバック (強化学習の更新) ---
 app.post('/api/feedback', async (c) => {
-  const { email, is_success } = await c.req.json();
-  // 成功時のみStreak更新 (スタイル更新はchat内ですでに完了しているため不要だが、強化学習的に「確定」させるならここでも良い)
-  if (is_success) {
-    await c.env.DB.prepare("UPDATE users SET streak = streak + 1 WHERE email = ?").bind(email).run();
-  }
-  const user: any = await c.env.DB.prepare("SELECT streak FROM users WHERE email = ?").bind(email).first();
-  return c.json({ streak: user.streak });
+  const { email, used_archetype, is_success } = await c.req.json();
+  try {
+    // 統計データとストリークを取得
+    const user: any = await c.env.DB.prepare("SELECT style_stats, streak FROM users WHERE email = ?").bind(email).first();
+    
+    let stats = user.style_stats ? JSON.parse(user.style_stats) : {};
+    
+    // 該当アーキタイプの統計を初期化
+    if (!stats[used_archetype]) stats[used_archetype] = { wins: 0, total: 0 };
+    
+    // 統計更新
+    stats[used_archetype].total += 1;
+    if (is_success) {
+      stats[used_archetype].wins += 1;
+    }
+
+    // DB更新
+    await c.env.DB.prepare("UPDATE users SET style_stats = ?, streak = streak + ? WHERE email = ?")
+      .bind(JSON.stringify(stats), is_success ? 1 : 0, email).run();
+
+    return c.json({ streak: user.streak + (is_success ? 1 : 0) });
+  } catch (e) { return c.json({ error: "DB Error" }, 500); }
 });
 
+// --- SNSシェアでの回復 ---
 app.post('/api/share-recovery', async (c) => {
-  const { email } = await c.req.json();
-  await c.env.DB.prepare("UPDATE users SET usage_count = 0 WHERE email = ?").bind(email).run();
-  return c.json({ success: true });
+  try {
+    const { email } = await c.req.json();
+    await c.env.DB.prepare("UPDATE users SET usage_count = 0 WHERE email = ?").bind(email).run();
+    return c.json({ success: true, message: "Usage limit reset!" });
+  } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
+// --- Stripe 決済セッション作成 ---
 app.post('/api/checkout', async (c) => {
   try {
-    const { email, plan } = await c.req.json(); 
+    const { email, plan } = await c.req.json();
     const stripe = getStripe(c.env);
+    
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
+    let customerId = user?.stripe_customer_id;
+
     const priceId = plan === 'monthly' ? c.env.STRIPE_PRICE_ID_MONTHLY : c.env.STRIPE_PRICE_ID_YEARLY;
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
       mode: 'subscription',
       success_url: `${c.env.FRONTEND_URL}/?payment=success`,
       cancel_url: `${c.env.FRONTEND_URL}/?payment=canceled`,
-      customer: user?.stripe_customer_id || undefined,
-      customer_email: user?.stripe_customer_id ? undefined : email,
+      customer: customerId || undefined,
+      customer_email: customerId ? undefined : email,
       metadata: { email }
     });
+
     return c.json({ url: session.url });
-  } catch(e: any) { return c.json({ error: e.message }, 500); }
+  } catch(e: any) {
+    return c.json({ error: e.message }, 500);
+  }
 });
 
+// --- サブスク管理ポータル ---
 app.post('/api/portal', async (c) => {
   try {
     const { email } = await c.req.json();
     const stripe = getStripe(c.env);
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
-    if (!user?.stripe_customer_id) return c.json({ error: "No billing info" }, 404);
+
+    if (!user || !user.stripe_customer_id) {
+      return c.json({ error: "No billing information found" }, 404);
+    }
+
     const session = await stripe.billingPortal.sessions.create({
       customer: user.stripe_customer_id,
       return_url: c.env.FRONTEND_URL,
     });
+
     return c.json({ url: session.url });
-  } catch (e: any) { return c.json({ error: e.message }, 500); }
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
 });
 
+// --- Stripe Webhook ---
 app.post('/api/webhook', async (c) => {
   const stripe = getStripe(c.env);
   const signature = c.req.header('stripe-signature');
   const body = await c.req.text();
+
   let event;
   try {
     if (!signature) throw new Error("No signature");
     event = await stripe.webhooks.constructEventAsync(body, signature, c.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err: any) { return c.text(`Webhook Error: ${err.message}`, 400); }
+  } catch (err: any) {
+    return c.text(`Webhook Error: ${err.message}`, 400);
+  }
+
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.metadata?.email || session.customer_details?.email;
-    if (email && session.customer) {
-      await c.env.DB.prepare("UPDATE users SET is_pro = 1, stripe_customer_id = ? WHERE email = ?").bind(session.customer, email).run();
+    const customerId = session.customer as string;
+    
+    if (email && customerId) {
+      await c.env.DB.prepare(
+        "UPDATE users SET is_pro = 1, stripe_customer_id = ? WHERE email = ?"
+      ).bind(customerId, email).run();
     }
   }
+
   if (event.type === 'customer.subscription.deleted') {
-    await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?").bind(event.data.object.customer).run();
+    const subscription = event.data.object as Stripe.Subscription;
+    const customerId = subscription.customer as string;
+    
+    await c.env.DB.prepare(
+      "UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?"
+    ).bind(customerId).run();
   }
+
   return c.text('Received', 200);
 });
 
