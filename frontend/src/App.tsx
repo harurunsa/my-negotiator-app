@@ -196,7 +196,6 @@ function App() {
       });
       const data = await res.json();
 
-      // ★ 制限チェック
       if (data.limit_reached) {
         setShowLimitModal(true);
         setLoading(false);
@@ -208,7 +207,7 @@ function App() {
       setChatLog(prev => [...prev, { 
         role: "ai", 
         text: data.reply, 
-        used_archetype: data.used_archetype, // ★変更: アーキタイプを保存
+        used_archetype: data.used_archetype,
         timer_seconds: data.timer_seconds,
         feedback_done: false
       }]);
@@ -227,7 +226,6 @@ function App() {
     updatedLog[index].feedback_done = true;
     setChatLog(updatedLog);
 
-    // ★変更: used_archetype を送信
     fetch(`${API_URL}/api/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -314,13 +312,11 @@ function App() {
               
               <div style={{width: '100%', height: '1px', background: '#eee', margin: '5px 0'}}></div>
 
-              {/* 年額プラン (推し) */}
               <button onClick={() => handleUpgrade('yearly')} style={styles.modalBtnPro}>
                 <div style={{fontSize: '0.8rem', opacity: 0.9, marginBottom: '2px'}}>✨ 2 Months Free</div>
                 👑 Upgrade to Pro (Yearly)
               </button>
 
-              {/* 月額プラン (控えめ) */}
               <button onClick={() => handleUpgrade('monthly')} style={styles.modalBtnMonthly}>
                 or Monthly Plan
               </button>
@@ -378,7 +374,6 @@ function App() {
           
           {user && (
              <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
-               {/* Proなら管理ボタン、Freeならアップグレードボタンを表示 */}
                {user.is_pro === 1 ? (
                  <button onClick={handlePortal} style={styles.portalBtn}>
                    ⚙️ {lang === 'ja' ? '管理' : 'Manage'}
@@ -445,7 +440,6 @@ function App() {
 
                     {log.role === 'ai' && !log.feedback_done && !timerActive && (
                       <div className="fade-in" style={styles.actionButtonContainer}>
-                        {/* ★変更: 引数に used_archetype を追加 */}
                         <button 
                           onClick={() => handleFeedback(i, log.used_archetype, true, log.timer_seconds)} 
                           className="pulse-button"
@@ -543,25 +537,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'rgba(247, 249, 252, 0.9)', backdropFilter: 'blur(10px)',
     borderBottom: '1px solid rgba(0,0,0,0.03)'
   },
-  
-  chatContainer: { 
-    flex: 1, 
-    display: 'flex', 
-    flexDirection: 'column', 
-    paddingTop: '70px',
-    minHeight: 0, // ★重要: これがないとスクロール領域が潰れることがある
-    position: 'relative'
-  }, 
-  chatScrollArea: { 
-    flex: 1, 
-    overflowY: 'auto', 
-    padding: '0 15px 20px 15px', 
-    display: 'flex', 
-    flexDirection: 'column', 
-    gap: '20px',
-    scrollBehavior: 'smooth' // ★追加: スクロールを滑らかに
-  },
-  
   logoIcon: { fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' },
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
   goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
@@ -575,7 +550,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: '#eef2f6', cursor: 'pointer', fontWeight: 'bold', color: '#555',
     display: 'flex', alignItems: 'center', gap: '4px'
   },
-  // ヘッダー用アップグレードボタン
   upgradeHeaderBtn: {
     padding: '6px 12px',
     fontSize: '0.8rem',
@@ -628,8 +602,26 @@ const styles: { [key: string]: React.CSSProperties } = {
     animation: 'float 15s infinite ease-in-out reverse'
   },
   
-  chatContainer: { flex: 1, display: 'flex', flexDirection: 'column', paddingTop: '70px' }, 
-  chatScrollArea: { flex: 1, overflowY: 'auto', padding: '0 15px 20px 15px', display: 'flex', flexDirection: 'column', gap: '20px' },
+  // ★重要修正: スクロール制御のため minHeight: 0 を追加
+  chatContainer: { 
+    flex: 1, 
+    display: 'flex', 
+    flexDirection: 'column', 
+    paddingTop: '70px',
+    minHeight: 0, 
+    position: 'relative'
+  }, 
+  // ★重要修正: overflowY: auto でスクロール領域を定義
+  chatScrollArea: { 
+    flex: 1, 
+    overflowY: 'auto', 
+    padding: '0 15px 20px 15px', 
+    display: 'flex', 
+    flexDirection: 'column', 
+    gap: '20px',
+    scrollBehavior: 'smooth'
+  },
+  
   emptyState: { textAlign: 'center', marginTop: '100px', color: '#999', lineHeight: '1.8' },
   messageRow: { display: 'flex', width: '100%' },
   systemMessage: { fontSize: '0.75rem', color: '#888', background: '#eef2f6', padding: '6px 14px', borderRadius: '20px', fontWeight: '600' },
@@ -650,12 +642,10 @@ const styles: { [key: string]: React.CSSProperties } = {
   timerLabel: { fontSize: '1rem', color: '#888', marginTop: '5px', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: '600' },
   timerCompleteBtn: { marginTop: '60px', background: '#00FFC2', border: 'none', color: '#000', padding: '16px 50px', borderRadius: '50px', fontSize: '1.2rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 0 30px rgba(0, 255, 194, 0.4)', textTransform: 'uppercase', letterSpacing: '1px' },
 
-  // モーダル用
   modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center' },
   modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
   modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
   
-  // 年額ボタン
   modalBtnPro: { 
     background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
     color: '#333', 
@@ -672,7 +662,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     overflow: 'hidden'
   },
   
-  // 月額ボタン
   modalBtnMonthly: {
     background: 'transparent',
     color: '#888',
