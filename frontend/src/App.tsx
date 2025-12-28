@@ -208,7 +208,7 @@ function App() {
       setChatLog(prev => [...prev, { 
         role: "ai", 
         text: data.reply, 
-        used_style: data.used_style,
+        used_archetype: data.used_archetype, // ★変更: アーキタイプを保存
         timer_seconds: data.timer_seconds,
         feedback_done: false
       }]);
@@ -219,7 +219,7 @@ function App() {
     }
   };
 
-  const handleFeedback = async (index: number, used_style: string, is_success: boolean, suggestedTimer: number) => {
+  const handleFeedback = async (index: number, used_archetype: string, is_success: boolean, suggestedTimer: number) => {
     if (!user) return;
     if (navigator.vibrate) navigator.vibrate(20);
 
@@ -227,10 +227,11 @@ function App() {
     updatedLog[index].feedback_done = true;
     setChatLog(updatedLog);
 
+    // ★変更: used_archetype を送信
     fetch(`${API_URL}/api/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: user.email, used_style, is_success }),
+      body: JSON.stringify({ email: user.email, used_archetype, is_success }),
     }).then(res => res.json()).then(data => {
       if (data.streak !== undefined) setUser({ ...user, streak: data.streak });
     });
@@ -444,15 +445,16 @@ function App() {
 
                     {log.role === 'ai' && !log.feedback_done && !timerActive && (
                       <div className="fade-in" style={styles.actionButtonContainer}>
+                        {/* ★変更: 引数に used_archetype を追加 */}
                         <button 
-                          onClick={() => handleFeedback(i, log.used_style, true, log.timer_seconds)} 
+                          onClick={() => handleFeedback(i, log.used_archetype, true, log.timer_seconds)} 
                           className="pulse-button"
                           style={styles.actionBtnPrimary}
                         >
                           {t.btn_start}
                         </button>
                         <button 
-                          onClick={() => handleFeedback(i, log.used_style, false, 0)} 
+                          onClick={() => handleFeedback(i, log.used_archetype, false, 0)} 
                           style={styles.actionBtnSecondary}
                         >
                           {t.btn_impossible}
@@ -634,7 +636,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
   modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
   
-  // 年額ボタン (さらに強調)
+  // 年額ボタン
   modalBtnPro: { 
     background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
     color: '#333', 
@@ -651,7 +653,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     overflow: 'hidden'
   },
   
-  // 月額ボタン (地味に)
+  // 月額ボタン
   modalBtnMonthly: {
     background: 'transparent',
     color: '#888',
