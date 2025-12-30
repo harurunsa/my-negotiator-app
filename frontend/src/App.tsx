@@ -29,7 +29,8 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweet & Reset (Free)",
     btn_pro: "👑 Upgrade to Pro (Yearly)",
     btn_monthly: "or Monthly Plan",
-    manage: "管理"
+    manage: "管理",
+    recover_success: "回復しました！(Chat Reset)"
   },
   en: {
     logo: "Negotiator",
@@ -55,7 +56,8 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweet & Reset (Free)",
     btn_pro: "👑 Upgrade to Pro (Yearly)",
     btn_monthly: "or Monthly Plan",
-    manage: "Manage"
+    manage: "Manage",
+    recover_success: "Usage limit reset!"
   },
   pt: {
     logo: "Negotiator",
@@ -81,7 +83,8 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweetar & Resetar (Grátis)",
     btn_pro: "👑 Upgrade para Pro (Anual)",
     btn_monthly: "ou Plano Mensal",
-    manage: "Gerenciar"
+    manage: "Gerenciar",
+    recover_success: "Limite resetado!"
   },
   es: {
     logo: "Negotiator",
@@ -107,7 +110,8 @@ const TRANSLATIONS = {
     btn_share: "🐦 Twittear y Reiniciar (Gratis)",
     btn_pro: "👑 Actualizar a Pro (Anual)",
     btn_monthly: "o Plan Mensual",
-    manage: "Gestionar"
+    manage: "Gestionar",
+    recover_success: "¡Límite reiniciado!"
   },
   id: {
     logo: "Negotiator",
@@ -133,7 +137,8 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweet & Reset (Gratis)",
     btn_pro: "👑 Upgrade ke Pro (Tahunan)",
     btn_monthly: "atau Paket Bulanan",
-    manage: "Kelola"
+    manage: "Kelola",
+    recover_success: "Batas direset!"
   }
 };
 
@@ -179,6 +184,7 @@ function App() {
         setLang(urlLang as LangCode);
       }
 
+      // ★初期化時にusage_countもセット (デフォルト0)
       setUser({ email, name, streak, is_pro, usage_count: 0 });
       window.history.replaceState({}, '', '/');
     }
@@ -268,7 +274,7 @@ function App() {
     }
   };
 
-  // ★修正: シェア時に画面上のカウントもリセットする
+  // ★修正: シェア後にユーザーの状態(usage_count)をリセットする
   const handleShare = async () => {
     if (!user) return;
     const text = encodeURIComponent(`ADHDの脳内会議を代行してくれるAIアプリ「Negotiator」を使ってみた！\n#MyNegotiatorApp`);
@@ -276,20 +282,21 @@ function App() {
     window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank');
 
     try {
-      await fetch(`${API_URL}/api/share-recovery`, {
+      const res = await fetch(`${API_URL}/api/share-recovery`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: user.email })
       });
       
-      // ★追加: フロントエンドの状態も即座にリセット
-      setUser(prev => prev ? { ...prev, usage_count: 0 } : null);
-      
-      setShowLimitModal(false);
-      alert("回復しました！(Chat Reset)");
-    } catch (e) {
+      if (res.ok) {
+        // ★ここ重要: フロントエンド上のカウントも0に戻す
+        setUser(prev => prev ? { ...prev, usage_count: 0 } : null);
+        
+        setShowLimitModal(false);
+        alert(t.recover_success);
+      }
+    } catch(e) {
       console.error(e);
-      alert("エラーが発生しました");
     }
   };
 
@@ -329,6 +336,12 @@ function App() {
         setLoading(false);
         return;
       }
+      
+      // AI返答があった場合、使用回数をカウントアップ（フロントエンド側の表示も同期）
+      if (action === 'normal' || action === 'retry') {
+         setUser(prev => prev ? { ...prev, usage_count: (prev.usage_count || 0) + 1 } : null);
+      }
+
       if (data.detected_goal) setCurrentGoal(data.detected_goal);
       setChatLog(prev => [...prev, { 
         role: "ai", 
