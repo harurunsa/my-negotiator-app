@@ -150,7 +150,6 @@ app.post('/api/chat', async (c) => {
     const langMap: {[key:string]: string} = { ja: 'Japanese', en: 'English', pt: 'Portuguese', es: 'Spanish', id: 'Indonesian' };
     const targetLangName = langMap[lang] || 'English';
     
-    // User Check
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
@@ -176,7 +175,6 @@ app.post('/api/chat', async (c) => {
         const completedTask = currentTaskList[taskIndex];
         
         const progressText = t.progress ? ` ${t.progress(nextIndex + 1, currentTaskList.length)}` : "";
-        
         const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
         
         await c.env.DB.prepare(
@@ -212,6 +210,7 @@ app.post('/api/chat', async (c) => {
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
+    // ★改善されたプロンプト (話の流れを自然にする)
     const systemInstruction = `
       You are an Executive Function Augmentation AI.
       [Language]: Reply in **${targetLangName}**.
@@ -221,16 +220,21 @@ app.post('/api/chat', async (c) => {
       
       [GOAL]: ${current_goal || "Infer from user input"}
       
+      [CRITICAL RULE FOR TASK LIST]:
+      - Task items must be **SHORT ACTION PHRASES ONLY** (e.g. "Pick up 5 pens", "Wipe the desk").
+      - DO NOT include conversational filler like "Great job! Next is..." inside the task list item. The system handles that.
+      
       [INSTRUCTIONS]:
       1. **IF 'RETRY' (Impossible)**:
          - The user cannot do "${currentTaskText}".
          - Break "${currentTaskText}" down into 2-3 tiny micro-steps.
-         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done.
+         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done (e.g. "Check if the area is clean enough to move on").
          - Output these micro-steps in "new_task_list".
-         - Be empathetic.
+         - Be empathetic in "reply".
          
       2. **IF 'NORMAL' (New Goal)**:
-         - If user input is a NEW goal, create a step-by-step checklist in "new_task_list".
+         - If user input is a NEW goal, create a **COMPLETE** step-by-step checklist in "new_task_list".
+         - Do not just give the first step. Give the full path to completion (max 5-7 steps).
       
       3. **IF 'NORMAL' (Chat/Motivation)**:
          - If user is just chatting, **DO NOT** return "new_task_list". 
@@ -238,8 +242,8 @@ app.post('/api/chat', async (c) => {
 
       [OUTPUT FORMAT]: JSON ONLY.
       {
-        "reply": "Conversational response",
-        "new_task_list": ["step1", "step2"...] (Optional),
+        "reply": "Conversational response (encouragement)",
+        "new_task_list": ["Action 1", "Action 2"...] (Optional),
         "timer_seconds": 180,
         "detected_goal": "Goal String"
       }
@@ -273,6 +277,7 @@ app.post('/api/chat', async (c) => {
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
       if (action === 'retry') {
+        // Retry時: [分解タスク] + [残りのタスク] を結合し、未来の予定を維持する
         finalTaskList = [...result.new_task_list, ...remainingTasks];
       } else {
         finalTaskList = result.new_task_list;
@@ -294,31 +299,23 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// --- 他のルート ---
-app.post('/api/feedback', async (c) => { /*...*/ return c.json({streak:0}); });
-
-// ★ 修正: シェア回復API
+// --- Share Recovery (DB Log Check) ---
 app.post('/api/share-recovery', async (c) => {
   try {
     const { email } = await c.req.json();
-    console.log(`[Share Recovery] Attempting reset for: ${email}`);
-    
     const result = await c.env.DB.prepare("UPDATE users SET usage_count = 0 WHERE email = ?").bind(email).run();
-    
-    console.log(`[Share Recovery] DB Result:`, JSON.stringify(result));
-
-    // 更新された行があるか確認 (D1仕様)
     if (result.meta.changes > 0) {
        return c.json({ success: true, message: "Usage limit reset!" });
     } else {
-       console.warn(`[Share Recovery] User not found: ${email}`);
        return c.json({ success: false, error: "User not found" }, 404);
     }
   } catch(e: any) { 
-    console.error(`[Share Recovery] Error:`, e);
     return c.json({ error: "DB Error", details: e.message }, 500); 
   }
 });
+
+// Checkout & Other Routes
+app.post('/api/feedback', async (c) => { /*...*/ return c.json({streak:0}); });
 
 app.post('/api/checkout', async (c) => {
   try {
