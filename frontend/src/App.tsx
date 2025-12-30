@@ -112,10 +112,11 @@ function App() {
       const res = await fetch(`${API_URL}/api/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email, plan }) // planを送信
+        body: JSON.stringify({ email: user.email, plan }) // ★ここ重要: planを送る
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
+      else console.error("No URL returned", data); // エラー確認用
     } catch (e) { 
       console.error(e);
       setLoading(false);
@@ -312,17 +313,15 @@ function App() {
               
               <div style={{width: '100%', height: '1px', background: '#eee', margin: '5px 0'}}></div>
 
+              {/* 年額プラン */}
               <button onClick={() => handleUpgrade('yearly')} style={styles.modalBtnPro}>
                 <div style={{fontSize: '0.8rem', opacity: 0.9, marginBottom: '2px'}}>✨ 2 Months Free</div>
                 👑 Upgrade to Pro (Yearly)
               </button>
 
+              {/* 月額プラン */}
               <button onClick={() => handleUpgrade('monthly')} style={styles.modalBtnMonthly}>
                 or Monthly Plan
-              </button>
-              
-              <button onClick={() => setShowLimitModal(false)} style={styles.modalBtnClose}>
-                Close
               </button>
             </div>
           </div>
