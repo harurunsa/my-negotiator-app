@@ -15,10 +15,22 @@ type Bindings = {
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
-app.use('/*', cors())
+
+// ★改善1: CORSをフロントエンドのURLのみに制限
+app.use('/*', async (c, next) => {
+  const corsMiddleware = cors({
+    origin: c.env.FRONTEND_URL || '*', // 環境変数がなければ全許可(開発用)
+    allowMethods: ['POST', 'GET', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    exposeHeaders: ['Content-Length'],
+    maxAge: 600,
+    credentials: true,
+  });
+  return corsMiddleware(c, next);
+});
 
 const DAILY_LIMIT = 5;
-const MAX_CONTEXT_CHARS = 1500; // 文脈保持のため少し増量
+const MAX_CONTEXT_CHARS = 1500;
 
 // --- PPP設定 ---
 const PPP_DISCOUNTS: { [key: string]: string } = {
@@ -36,24 +48,31 @@ const MESSAGES: any = {
   ja: { 
     limit_reached: "無料版の制限に達しました。シェアで回復するか、Proへ！",
     complete: "🎉 すべてのタスクが完了しました！素晴らしい達成です！次はどうしますか？",
-    next_prefix: "👍 ナイス！次はこれです: "
+    next_prefix: "👍 ナイス！次はこれです: ",
+    progress: (cur: number, tot: number) => `(進捗: ${cur}/${tot})`
   },
   en: { 
     limit_reached: "Free limit reached. Share or Upgrade!",
     complete: "🎉 All tasks completed! Amazing work! What's next?",
-    next_prefix: "👍 Nice! Next up: "
+    next_prefix: "👍 Nice! Next up: ",
+    progress: (cur: number, tot: number) => `(Step: ${cur}/${tot})`
   },
-  pt: { limit_reached: "Limite atingido.", complete: "🎉 Tarefas concluídas!", next_prefix: "👍 Boa! Próximo: " },
-  es: { limit_reached: "Límite alcanzado.", complete: "🎉 ¡Tareas completadas!", next_prefix: "👍 ¡Bien! Siguiente: " },
-  id: { limit_reached: "Batas tercapai.", complete: "🎉 Semua tugas selesai!", next_prefix: "👍 Bagus! Berikutnya: " }
+  pt: { limit_reached: "Limite atingido.", complete: "🎉 Tarefas concluídas!", next_prefix: "👍 Boa! Próximo: ", progress: (c:number, t:number) => `(${c}/${t})` },
+  es: { limit_reached: "Límite alcanzado.", complete: "🎉 ¡Tareas completadas!", next_prefix: "👍 ¡Bien! Siguiente: ", progress: (c:number, t:number) => `(${c}/${t})` },
+  id: { limit_reached: "Batas tercapai.", complete: "🎉 Semua tugas selesai!", next_prefix: "👍 Bagus! Berikutnya: ", progress: (c:number, t:number) => `(${c}/${t})` }
 };
 
 // --- Helper Functions ---
+
+// ★改善2: JSONパースの強化 (Markdown記法やコメントを除去)
 function extractJson(text: string): string {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
+  // Markdownのコードブロックを除去
+  let cleaned = text.replace(/```json\s*|\s*```/g, '');
+  // 最初の { から 最後の } までを抽出
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
   if (start === -1 || end === -1) return "{}";
-  return text.substring(start, end + 1);
+  return cleaned.substring(start, end + 1);
 }
 
 function truncateContext(text: string): string {
@@ -126,7 +145,7 @@ app.post('/api/language', async (c) => {
   return c.json({ success: true });
 });
 
-// --- ★ AI Chat (堅牢化 & コスト最適化版) ---
+// --- AI Chat ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en' } = await c.req.json()
@@ -144,25 +163,26 @@ app.post('/api/chat', async (c) => {
       return c.json({ limit_reached: true, reply: t.limit_reached });
     }
 
-    // Increment Usage (except for system-next)
     if (action === 'normal' || action === 'retry') {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // 現在のタスク状態を取得
+    // タスク状態取得
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
 
-    // --- ★ Action: NEXT (No API Call + Memory Sync) ---
+    // --- Action: NEXT (No API Call) ---
     if (action === 'next') {
       let nextIndex = taskIndex + 1;
 
       if (nextIndex < currentTaskList.length) {
         const nextTask = currentTaskList[nextIndex];
-        const completedTask = currentTaskList[taskIndex]; // 直前のタスク
-
-        // ★重要: APIを呼ばない代わりに、DBの記憶に「完了したこと」を追記する
+        const completedTask = currentTaskList[taskIndex];
+        
+        // ★改善3: 進捗表示を追加
+        const progressText = t.progress ? ` ${t.progress(nextIndex + 1, currentTaskList.length)}` : "";
+        
         const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
         
         await c.env.DB.prepare(
@@ -170,13 +190,12 @@ app.post('/api/chat', async (c) => {
         ).bind(nextIndex, updatedMemory, email).run();
         
         return c.json({
-          reply: `${t.next_prefix}${nextTask}`,
+          reply: `${t.next_prefix}${nextTask}${progressText}`, // 進捗を表示
           timer_seconds: 180,
           detected_goal: current_goal,
           used_archetype: "system_optimized"
         });
       } else {
-        // 全完了: リストをリセット
         await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
         return c.json({
           reply: t.complete,
@@ -187,16 +206,14 @@ app.post('/api/chat', async (c) => {
       }
     }
 
-    // --- ★ Action: RETRY or NORMAL (Call API) ---
+    // --- Action: RETRY or NORMAL (Call API) ---
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
     const currentTaskText = currentTaskList[taskIndex] || "None";
-    
-    // ★重要: AIに「現在の進捗状況」を教える
-    // これにより、AIは「残りのタスク」を考慮してプランを練り直せる
     const remainingTasks = currentTaskList.slice(taskIndex + 1); 
+    
     const planContext = currentTaskList.length > 0 
-      ? `[Current Plan Status]: Working on "${currentTaskText}". Future steps: ${JSON.stringify(remainingTasks)}.` 
+      ? `[Current Plan Status]: Working on step ${taskIndex + 1}/${currentTaskList.length} "${currentTaskText}". Future steps: ${JSON.stringify(remainingTasks)}.` 
       : "[Current Plan Status]: No active plan.";
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
@@ -246,27 +263,29 @@ app.post('/api/chat', async (c) => {
 
     const data: any = await response.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    const result = JSON.parse(extractJson(rawText));
-
-    // ★ リスト更新ロジック (賢く結合)
-    if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
-      let finalTaskList: string[] = [];
-      
-      if (action === 'retry') {
-        // Retryの場合: [分解されたタスク] + [残っていた未来のタスク] を結合して保存
-        // これにより、未来の予定を消さずに済みます
-        finalTaskList = [...result.new_task_list, ...remainingTasks];
-      } else {
-        // 新規ゴールの場合: 新しいリストで上書き
-        finalTaskList = result.new_task_list;
-      }
-
-      await c.env.DB.prepare(
-        "UPDATE users SET task_list = ?, current_task_index = 0 WHERE email = ?"
-      ).bind(JSON.stringify(finalTaskList), email).run();
+    
+    // ★JSONパースエラー時のフォールバック処理
+    let result;
+    try {
+      result = JSON.parse(extractJson(rawText));
+    } catch (e) {
+      console.error("JSON Parse Error:", rawText);
+      result = { 
+        reply: lang === 'ja' ? "申し訳ありません、通信エラーが発生しました。もう一度教えてください。" : "Sorry, a connection error occurred. Please try again.",
+        timer_seconds: 60
+      };
     }
 
-    // 記憶更新
+    if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
+      let finalTaskList: string[] = [];
+      if (action === 'retry') {
+        finalTaskList = [...result.new_task_list, ...remainingTasks];
+      } else {
+        finalTaskList = result.new_task_list;
+      }
+      await c.env.DB.prepare("UPDATE users SET task_list = ?, current_task_index = 0 WHERE email = ?").bind(JSON.stringify(finalTaskList), email).run();
+    }
+
     if (result.reply) {
       c.executionCtx.waitUntil((async () => {
         const newMem = truncateContext(userMemory + ` U:${message} A:${result.reply}`);
@@ -281,9 +300,9 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// --- 他のルート (変更なし) ---
-app.post('/api/feedback', async (c) => { /*...省略...*/ return c.json({streak:0}); });
-app.post('/api/share-recovery', async (c) => { /*...省略...*/ return c.json({success:true}); });
+// 他のルートは変更なし
+app.post('/api/feedback', async (c) => { /*...*/ return c.json({streak:0}); });
+app.post('/api/share-recovery', async (c) => { /*...*/ return c.json({success:true}); });
 
 app.post('/api/checkout', async (c) => {
   try {
@@ -316,7 +335,7 @@ app.post('/api/checkout', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-app.post('/api/portal', async (c) => { /*...省略...*/ return c.json({url:""}); });
-app.post('/api/webhook', async (c) => { /*...省略...*/ return c.text('Received'); });
+app.post('/api/portal', async (c) => { /*...*/ return c.json({url:""}); });
+app.post('/api/webhook', async (c) => { /*...*/ return c.text('Received'); });
 
 export default app
