@@ -44,10 +44,10 @@ const TRANSLATIONS = {
     contact_send: "送信する",
     contact_success: "送信しました！ご意見ありがとうございます。",
     contact_error: "送信に失敗しました。",
-    
-    // ★追加: PWA用
     install_app: "アプリをインストール",
-    install_desc: "ホーム画面に追加して、より快適に！"
+    install_desc: "ホーム画面に追加して、より快適に！",
+    install_btn: "追加する",
+    install_close: "閉じる"
   },
   en: {
     logo: "Negotiator",
@@ -88,9 +88,10 @@ const TRANSLATIONS = {
     contact_send: "Send",
     contact_success: "Sent! Thank you for your feedback.",
     contact_error: "Failed to send.",
-    
     install_app: "Install App",
-    install_desc: "Add to home screen for better experience!"
+    install_desc: "Add to home screen for better experience!",
+    install_btn: "Install",
+    install_close: "Close"
   },
   pt: {
     logo: "Negotiator",
@@ -131,9 +132,10 @@ const TRANSLATIONS = {
     contact_send: "Enviar",
     contact_success: "Enviado!",
     contact_error: "Erro.",
-    
     install_app: "Instalar App",
-    install_desc: "Adicione à tela inicial para melhor experiência!"
+    install_desc: "Adicione à tela inicial!",
+    install_btn: "Instalar",
+    install_close: "Fechar"
   },
   es: {
     logo: "Negotiator",
@@ -174,9 +176,10 @@ const TRANSLATIONS = {
     contact_send: "Enviar",
     contact_success: "¡Enviado!",
     contact_error: "Error.",
-    
     install_app: "Instalar App",
-    install_desc: "¡Añadir a inicio para mejor experiencia!"
+    install_desc: "¡Añadir a inicio!",
+    install_btn: "Instalar",
+    install_close: "Cerrar"
   },
   id: {
     logo: "Negotiator",
@@ -217,9 +220,10 @@ const TRANSLATIONS = {
     contact_send: "Kirim",
     contact_success: "Terkirim!",
     contact_error: "Gagal.",
-    
     install_app: "Instal Aplikasi",
-    install_desc: "Tambahkan ke layar utama!"
+    install_desc: "Tambahkan ke layar utama!",
+    install_btn: "Instal",
+    install_close: "Tutup"
   }
 };
 
@@ -236,9 +240,8 @@ function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
   const [contactMsg, setContactMsg] = useState("");
   
-  // PWA用ステート
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showInstallBtn, setShowInstallBtn] = useState(false);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
 
   const [lang, setLang] = useState<LangCode>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -272,12 +275,15 @@ function App() {
     }
   }, []);
 
-  // ★ PWA インストールイベントのハンドリング
+  // PWA Install Prompt Logic
   useEffect(() => {
     const handler = (e: any) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      setShowInstallBtn(true);
+      // インストール済みでなければバナーを表示
+      if (!window.matchMedia('(display-mode: standalone)').matches) {
+        setShowInstallBanner(true);
+      }
     };
     window.addEventListener('beforeinstallprompt', handler);
     return () => window.removeEventListener('beforeinstallprompt', handler);
@@ -289,7 +295,7 @@ function App() {
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
       setDeferredPrompt(null);
-      setShowInstallBtn(false);
+      setShowInstallBanner(false);
     }
   };
 
@@ -358,12 +364,9 @@ function App() {
         body: JSON.stringify({ email: user.email })
       });
       const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert("管理画面への移動に失敗しました。まだ課金履歴がない可能性があります。");
-        setLoading(false);
-      }
+      if (data.url) window.location.href = data.url;
+      else alert("管理画面への移動に失敗しました。まだ課金履歴がない可能性があります。");
+      setLoading(false);
     } catch (e) {
       console.error(e);
       alert("エラーが発生しました");
@@ -536,13 +539,6 @@ function App() {
           <div className="fade-in" style={styles.emptyState}>
             <div style={{fontSize: '3rem', marginBottom: '20px'}}>{t.empty_icon}</div>
             <p style={{whiteSpace:'pre-line'}}>{t.empty_text}</p>
-            {/* ★ PWAインストールボタン (チャット開始前にも表示) */}
-            {showInstallBtn && (
-              <button onClick={handleInstallClick} style={styles.installBtn}>
-                <span style={{fontSize:'1.2rem'}}>📲</span> {t.install_app}
-                <div style={{fontSize:'0.7rem', fontWeight:'normal'}}>{t.install_desc}</div>
-              </button>
-            )}
           </div>
         )}
         {chatLog.map((log, i) => (
@@ -618,6 +614,18 @@ function App() {
 
   return (
     <div style={styles.appContainer}>
+      {/* PWA Install Banner */}
+      {showInstallBanner && (
+        <div style={styles.installBanner} className="pop-in">
+          <div style={{flex:1}}>
+            <div style={{fontWeight:'bold', fontSize:'0.9rem'}}>{t.install_app}</div>
+            <div style={{fontSize:'0.75rem', opacity:0.8}}>{t.install_desc}</div>
+          </div>
+          <button onClick={handleInstallClick} style={styles.installBannerBtn}>{t.install_btn}</button>
+          <button onClick={() => setShowInstallBanner(false)} style={styles.installBannerClose}>✕</button>
+        </div>
+      )}
+
       {showLimitModal && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
@@ -709,7 +717,7 @@ function App() {
 
       {/* Global CSS */}
       <style>{`
-        body { margin: 0; background-color: #F7F9FC; color: #1a1a1a; }
+        body { margin: 0; background-color: #F7F9FC; color: #1a1a1a; overscroll-behavior: none; }
         @keyframes popIn { 0% { opacity: 0; transform: scale(0.9) translateY(10px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
         @keyframes fadeIn { 0% { opacity: 0; } 100% { opacity: 1; } }
         @keyframes pulse { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 255, 194, 0.7); } 70% { transform: scale(1.02); box-shadow: 0 0 0 10px rgba(0, 255, 194, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 255, 194, 0); } }
@@ -726,6 +734,13 @@ function App() {
         .typing-dot:nth-child(1) { animation-delay: -0.32s; }
         .typing-dot:nth-child(2) { animation-delay: -0.16s; }
         @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+        
+        /* Mobile Optimization */
+        @media (max-width: 600px) {
+          body { font-size: 16px; }
+          button { min-height: 44px; }
+          input, textarea { font-size: 16px; }
+        }
       `}</style>
     </div>
   )
@@ -742,7 +757,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '10px 20px', zIndex: 10,
     background: 'rgba(247, 249, 252, 0.9)', backdropFilter: 'blur(10px)',
-    borderBottom: '1px solid rgba(0,0,0,0.03)'
+    borderBottom: '1px solid rgba(0,0,0,0.03)',
+    paddingTop: 'env(safe-area-inset-top)'
   },
   logoIcon: { fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' },
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
@@ -753,11 +769,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555', outline: 'none'
   },
   navBtn: {
-    background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', padding: '5px'
+    background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', padding: '5px'
   },
   
   pageContainer: {
-    flex: 1, paddingTop: '80px', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center'
+    flex: 1, paddingTop: '80px', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowY: 'auto'
   },
   card: {
     background: 'white', padding: '30px', borderRadius: '24px', width: '100%', maxWidth: '400px',
@@ -767,10 +783,23 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: '#1a1a1a', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '12px',
     fontWeight: '700', cursor: 'pointer', width: '100%'
   },
-  installBtn: {
-    background: '#00C2FF', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '12px',
-    fontWeight: '700', cursor: 'pointer', margin: '20px auto', display: 'block', boxShadow: '0 4px 15px rgba(0,194,255,0.4)'
+  
+  // ★ PWA Install Banner Style
+  installBanner: {
+    position: 'fixed', bottom: '20px', left: '20px', right: '20px',
+    background: '#1a1a1a', color: 'white', padding: '15px 20px', borderRadius: '16px',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    zIndex: 999, boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+    maxWidth: '560px', margin: '0 auto'
   },
+  installBannerBtn: {
+    background: '#00C2FF', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '8px',
+    fontWeight: '700', cursor: 'pointer', fontSize: '0.9rem', marginLeft: '10px'
+  },
+  installBannerClose: {
+    background: 'transparent', border: 'none', color: '#888', fontSize: '1.2rem', cursor: 'pointer', marginLeft: '10px'
+  },
+
   contactTextarea: {
     width: '100%', maxWidth: '400px', height: '150px', padding: '15px', borderRadius: '12px',
     border: '1px solid #ddd', fontSize: '1rem', marginBottom: '20px', resize: 'none'
@@ -826,7 +855,17 @@ const styles: { [key: string]: React.CSSProperties } = {
   actionButtonContainer: { marginTop: '15px', paddingTop: '15px', borderTop: '1px solid rgba(0,0,0,0.05)', display: 'flex', gap: '12px', justifyContent: 'space-between' },
   actionBtnPrimary: { flex: 1, background: '#1a1a1a', color: '#fff', border: 'none', padding: '12px 0', borderRadius: '12px', fontWeight: '700', fontSize: '0.9rem', cursor: 'pointer', boxShadow: '0 4px 15px rgba(0,0,0,0.2)' },
   actionBtnSecondary: { flex: 0.4, background: '#F1F5F9', color: '#64748B', border: 'none', padding: '12px 0', borderRadius: '12px', fontWeight: '600', fontSize: '0.85rem', cursor: 'pointer' },
-  inputArea: { padding: '15px', background: '#fff', display: 'flex', gap: '12px', alignItems: 'center', paddingBottom: 'max(15px, env(safe-area-inset-bottom))', boxShadow: '0 -5px 20px rgba(0,0,0,0.03)' },
+  
+  // Input Area (Mobile Safe Area)
+  inputArea: { 
+    padding: '15px', 
+    background: '#fff', 
+    display: 'flex', 
+    gap: '12px', 
+    alignItems: 'center', 
+    paddingBottom: 'max(15px, env(safe-area-inset-bottom))', // iPhone Notch Support
+    boxShadow: '0 -5px 20px rgba(0,0,0,0.03)' 
+  },
   inputField: { flex: 1, padding: '16px 20px', borderRadius: '25px', border: 'none', fontSize: '1rem', outline: 'none', background: '#F1F5F9', color: '#1a1a1a' },
   sendBtn: { width: '50px', height: '50px', borderRadius: '50%', background: '#3A86FF', color: '#fff', border: 'none', fontSize: '1.4rem', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', boxShadow: '0 4px 12px rgba(58, 134, 255, 0.3)' },
   
