@@ -16,10 +16,10 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// ★改善1: CORSをフロントエンドのURLのみに制限
+// CORS制限 (本番運用向け)
 app.use('/*', async (c, next) => {
   const corsMiddleware = cors({
-    origin: c.env.FRONTEND_URL || '*', // 環境変数がなければ全許可(開発用)
+    origin: c.env.FRONTEND_URL || '*',
     allowMethods: ['POST', 'GET', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     exposeHeaders: ['Content-Length'],
@@ -49,7 +49,7 @@ const MESSAGES: any = {
     limit_reached: "無料版の制限に達しました。シェアで回復するか、Proへ！",
     complete: "🎉 すべてのタスクが完了しました！素晴らしい達成です！次はどうしますか？",
     next_prefix: "👍 ナイス！次はこれです: ",
-    progress: (cur: number, tot: number) => `(進捗: ${cur}/${tot})`
+    progress: (cur: number, tot: number) => `(${cur}/${tot})`
   },
   en: { 
     limit_reached: "Free limit reached. Share or Upgrade!",
@@ -63,12 +63,8 @@ const MESSAGES: any = {
 };
 
 // --- Helper Functions ---
-
-// ★改善2: JSONパースの強化 (Markdown記法やコメントを除去)
 function extractJson(text: string): string {
-  // Markdownのコードブロックを除去
   let cleaned = text.replace(/```json\s*|\s*```/g, '');
-  // 最初の { から 最後の } までを抽出
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
   if (start === -1 || end === -1) return "{}";
@@ -154,11 +150,9 @@ app.post('/api/chat', async (c) => {
     const langMap: {[key:string]: string} = { ja: 'Japanese', en: 'English', pt: 'Portuguese', es: 'Spanish', id: 'Indonesian' };
     const targetLangName = langMap[lang] || 'English';
     
-    // User Check
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
-    // Limit Check
     if (!user.is_pro && user.usage_count >= DAILY_LIMIT) {
       return c.json({ limit_reached: true, reply: t.limit_reached });
     }
@@ -172,7 +166,7 @@ app.post('/api/chat', async (c) => {
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
 
-    // --- Action: NEXT (No API Call) ---
+    // --- Action: NEXT (APIなしで高速応答) ---
     if (action === 'next') {
       let nextIndex = taskIndex + 1;
 
@@ -180,7 +174,7 @@ app.post('/api/chat', async (c) => {
         const nextTask = currentTaskList[nextIndex];
         const completedTask = currentTaskList[taskIndex];
         
-        // ★改善3: 進捗表示を追加
+        // 進捗表示
         const progressText = t.progress ? ` ${t.progress(nextIndex + 1, currentTaskList.length)}` : "";
         
         const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
@@ -190,7 +184,7 @@ app.post('/api/chat', async (c) => {
         ).bind(nextIndex, updatedMemory, email).run();
         
         return c.json({
-          reply: `${t.next_prefix}${nextTask}${progressText}`, // 進捗を表示
+          reply: `${t.next_prefix}${nextTask}${progressText}`,
           timer_seconds: 180,
           detected_goal: current_goal,
           used_archetype: "system_optimized"
@@ -206,18 +200,20 @@ app.post('/api/chat', async (c) => {
       }
     }
 
-    // --- Action: RETRY or NORMAL (Call API) ---
+    // --- Action: RETRY or NORMAL (APIコール) ---
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
     const currentTaskText = currentTaskList[taskIndex] || "None";
     const remainingTasks = currentTaskList.slice(taskIndex + 1); 
     
+    // ★現在のプラン情報をプロンプトに詳しく入れる
     const planContext = currentTaskList.length > 0 
       ? `[Current Plan Status]: Working on step ${taskIndex + 1}/${currentTaskList.length} "${currentTaskText}". Future steps: ${JSON.stringify(remainingTasks)}.` 
       : "[Current Plan Status]: No active plan.";
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
+    // ★修正: Retry時の論理破綻を防ぐプロンプト
     const systemInstruction = `
       You are an Executive Function Augmentation AI.
       [Language]: Reply in **${targetLangName}**.
@@ -231,6 +227,7 @@ app.post('/api/chat', async (c) => {
       1. **IF 'RETRY' (Impossible)**:
          - The user cannot do "${currentTaskText}".
          - Break "${currentTaskText}" down into 2-3 tiny micro-steps.
+         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done (e.g. "Check if the floor looks better").
          - Output these micro-steps in "new_task_list".
          - Be empathetic.
          
@@ -264,14 +261,13 @@ app.post('/api/chat', async (c) => {
     const data: any = await response.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     
-    // ★JSONパースエラー時のフォールバック処理
     let result;
     try {
       result = JSON.parse(extractJson(rawText));
     } catch (e) {
       console.error("JSON Parse Error:", rawText);
       result = { 
-        reply: lang === 'ja' ? "申し訳ありません、通信エラーが発生しました。もう一度教えてください。" : "Sorry, a connection error occurred. Please try again.",
+        reply: lang === 'ja' ? "申し訳ありません、通信エラーが発生しました。" : "Connection error.",
         timer_seconds: 60
       };
     }
@@ -279,6 +275,8 @@ app.post('/api/chat', async (c) => {
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
       if (action === 'retry') {
+        // Retry時: [新しいマイクロタスク] + [残りのタスク]
+        // これで「床の一つ」を拾った後に、ちゃんと「床の残り」や「机」へ進めるようになります
         finalTaskList = [...result.new_task_list, ...remainingTasks];
       } else {
         finalTaskList = result.new_task_list;
