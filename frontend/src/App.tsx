@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 // @ts-ignore
 import confetti from 'https://esm.sh/canvas-confetti';
 
-const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
+const API_URL = "https://api.negotiatortool.net";
 
 const TRANSLATIONS = {
   ja: {
