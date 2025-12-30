@@ -23,30 +23,14 @@ app.use('/*', cors())
 const DAILY_LIMIT = 5;
 
 // --- PPP設定 (購買力平価) ---
-// 国コード (ISO 3166-1 alpha-2) と Lemon Squeezyのクーポンコードの対応
 const PPP_DISCOUNTS: { [key: string]: string } = {
-  // 50% OFF (低所得国)
-  'IN': 'PPP50', // India
-  'BR': 'PPP50', // Brazil
-  'ID': 'PPP50', // Indonesia
-  'PH': 'PPP50', // Philippines
-  'VN': 'PPP50', // Vietnam
-  'EG': 'PPP50', // Egypt
-  'NG': 'PPP50', // Nigeria
-  'BD': 'PPP50', // Bangladesh
-  'PK': 'PPP50', // Pakistan
-
-  // 30% OFF (中所得国)
-  'CN': 'PPP30', // China
-  'MX': 'PPP30', // Mexico
-  'TH': 'PPP30', // Thailand
-  'TR': 'PPP30', // Turkey
-  'MY': 'PPP30', // Malaysia
-  'RU': 'PPP30', // Russia
-  'AR': 'PPP30', // Argentina
+  'IN': 'PPP50', 'BR': 'PPP50', 'ID': 'PPP50', 'PH': 'PPP50', 
+  'VN': 'PPP50', 'EG': 'PPP50', 'NG': 'PPP50', 'BD': 'PPP50', 'PK': 'PPP50',
+  'CN': 'PPP30', 'MX': 'PPP30', 'TH': 'PPP30', 'TR': 'PPP30', 
+  'MY': 'PPP30', 'RU': 'PPP30', 'AR': 'PPP30',
 };
 
-// --- プロンプト定義 ---
+// --- アーキタイプ定義 ---
 const ARCHETYPES = {
   empathy: {
     label: "The Empathic Counselor",
@@ -72,6 +56,16 @@ const ARCHETYPES = {
 
 type ArchetypeKey = keyof typeof ARCHETYPES;
 
+// --- 多言語メッセージ定数 ---
+// 言語ごとのシステムメッセージなどを定義
+const MESSAGES: any = {
+  ja: { limit_reached: "無料版の制限に達しました。SNSシェアで回復するか、Proプランにアップグレードしてください！" },
+  en: { limit_reached: "Free limit reached. Share to reset or Upgrade!" },
+  pt: { limit_reached: "Limite gratuito atingido. Compartilhe para resetar ou faça Upgrade!" }, // Portuguese
+  es: { limit_reached: "Límite gratuito alcanzado. ¡Comparte para reiniciar o actualiza a Pro!" }, // Spanish
+  id: { limit_reached: "Batas gratis tercapai. Bagikan untuk reset atau Upgrade!" } // Indonesian
+};
+
 function extractJson(text: string): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -82,7 +76,6 @@ function extractJson(text: string): string {
 // --- Lemon Squeezy API Helper ---
 async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
   console.log(`[LemonSqueezy] Request: ${method} /${path}`);
-  
   const res = await fetch(`https://api.lemonsqueezy.com/v1/${path}`, {
     method,
     headers: {
@@ -109,7 +102,6 @@ async function callLemonSqueezy(path: string, method: string, apiKey: string, bo
       : "Unknown API Error";
     throw new Error(`Lemon Squeezy Failed: ${errorDetail}`);
   }
-  
   return data;
 }
 
@@ -160,6 +152,15 @@ app.post('/api/chat', async (c) => {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     
+    // 言語設定の取得 (デフォルト英語)
+    const t = MESSAGES[lang] || MESSAGES.en;
+    
+    // 言語コードから英語の言語名へ変換（プロンプト用）
+    const langMap: {[key:string]: string} = {
+      ja: 'Japanese', en: 'English', pt: 'Portuguese', es: 'Spanish', id: 'Indonesian'
+    };
+    const targetLangName = langMap[lang] || 'English';
+
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
@@ -172,9 +173,7 @@ app.post('/api/chat', async (c) => {
     if (!user.is_pro && user.usage_count >= DAILY_LIMIT) {
       return c.json({ 
         limit_reached: true, 
-        reply: lang === 'ja' 
-          ? "無料版の制限に達しました。SNSシェアで回復するか、Proプランにアップグレードしてください！"
-          : "Free limit reached. Share to reset or Upgrade!"
+        reply: t.limit_reached
       });
     }
 
@@ -217,7 +216,7 @@ app.post('/api/chat', async (c) => {
       [STRATEGY INSTRUCTION]: ${archetype.prompt}
       
       [User Memory]: ${userMemory}
-      [Language]: Reply in ${lang === 'en' ? 'English' : 'Japanese'}.
+      [Language]: Reply in **${targetLangName}**.
       
       [CRITICAL RULES]:
       1. **KEEP IT SHORT**. Maximum 2-3 sentences.
@@ -231,9 +230,9 @@ app.post('/api/chat', async (c) => {
       
       [OUTPUT JSON ONLY]:
       {
-        "reply": "Short response text",
+        "reply": "Short response text in ${targetLangName}",
         "timer_seconds": Integer,
-        "detected_goal": "Goal string",
+        "detected_goal": "Goal string (translate to ${targetLangName})",
         "used_archetype": "${selectedKey}" 
       }
     `;
@@ -261,8 +260,16 @@ app.post('/api/chat', async (c) => {
     }
 
     if (!result) {
+      // エラー時のフォールバックメッセージ（多言語対応）
+      const errorMsgs: any = {
+        ja: "通信エラーです。深呼吸してリラックスしましょう。",
+        en: "Connection error. Take a deep breath.",
+        pt: "Erro de conexão. Respire fundo.",
+        es: "Error de conexión. Respira hondo.",
+        id: "Kesalahan koneksi. Tarik napas dalam-dalam."
+      };
       result = {
-        reply: "通信エラーです。深呼吸してリラックスしましょう。",
+        reply: errorMsgs[lang] || errorMsgs.en,
         timer_seconds: 60,
         detected_goal: current_goal,
         used_archetype: selectedKey
@@ -314,16 +321,14 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
-// --- ★ CHECKOUT (PPP Enabled) ---
+// --- Checkout (PPP Enabled) ---
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
     
-    // 1. 環境変数のチェック
     if (!c.env.LEMON_SQUEEZY_STORE_ID) throw new Error("Server Error: Missing Store ID");
     if (!c.env.LEMON_SQUEEZY_API_KEY) throw new Error("Server Error: Missing API Key");
 
-    // 2. Variant IDの選択
     let variantId = plan === 'monthly' 
       ? c.env.LEMON_SQUEEZY_VARIANT_ID_MONTHLY 
       : c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
@@ -334,7 +339,7 @@ app.post('/api/checkout', async (c) => {
       throw new Error(`Server Error: Missing Variant ID for plan '${plan}'`);
     }
 
-    // ★ PPPロジック: Cloudflareヘッダーから国コードを取得
+    // PPP Logic
     const country = c.req.header('cf-ipcountry');
     let discountCode = undefined;
 
@@ -343,7 +348,6 @@ app.post('/api/checkout', async (c) => {
       console.log(`[PPP] Applying discount ${discountCode} for country ${country}`);
     }
 
-    // Checkout作成 (redirect_urlの場所を修正済み)
     const payload: any = {
       data: {
         type: "checkouts",
@@ -351,7 +355,6 @@ app.post('/api/checkout', async (c) => {
           checkout_data: {
             email,
             custom: { user_email: email },
-            // ★割引コードがあれば適用
             ...(discountCode ? { discount_code: discountCode } : {})
           },
           product_options: { 
