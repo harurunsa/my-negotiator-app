@@ -1,16 +1,19 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import Stripe from 'stripe'
 
 type Bindings = {
   GOOGLE_CLIENT_ID: string
   GOOGLE_CLIENT_SECRET: string
   DB: D1Database
   GEMINI_API_KEY: string
-  STRIPE_SECRET_KEY: string
-  STRIPE_WEBHOOK_SECRET: string
-  STRIPE_PRICE_ID_YEARLY: string
-  STRIPE_PRICE_ID_MONTHLY: string
+  
+  // Lemon Squeezy用 (Cloudflare環境変数から読み込む)
+  LEMON_SQUEEZY_API_KEY: string
+  LEMON_SQUEEZY_STORE_ID: string
+  LEMON_SQUEEZY_VARIANT_ID_YEARLY: string
+  LEMON_SQUEEZY_VARIANT_ID_MONTHLY: string
+  LEMON_SQUEEZY_WEBHOOK_SECRET: string
+  
   FRONTEND_URL: string
 }
 
@@ -19,7 +22,7 @@ app.use('/*', cors())
 
 const DAILY_LIMIT = 5;
 
-// ★変更: プロンプトに「短さ」を徹底させる制約(CONSTRAINT)を追加
+// プロンプト定義: 「短さ」を徹底させる制約(CONSTRAINT)を追加済み
 const ARCHETYPES = {
   empathy: {
     label: "The Empathic Counselor",
@@ -45,13 +48,25 @@ const ARCHETYPES = {
 
 type ArchetypeKey = keyof typeof ARCHETYPES;
 
-const getStripe = (env: Bindings) => new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' as any });
-
 function extractJson(text: string): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start === -1 || end === -1) return "{}";
   return text.substring(start, end + 1);
+}
+
+// --- Lemon Squeezy API Helper ---
+async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
+  const res = await fetch(`https://api.lemonsqueezy.com/v1/${path}`, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Accept': 'application/vnd.api+json',
+      'Content-Type': 'application/vnd.api+json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  return await res.json();
 }
 
 // --- 認証周り ---
@@ -153,7 +168,7 @@ app.post('/api/chat', async (c) => {
     // 高速モデルを使用
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
-    // ★変更: システムプロンプトで「短さ」と「会話」を強制
+    // システムプロンプト: 短さと会話を強制
     const systemInstruction = `
       You are an Executive Function Augmentation AI for ADHD.
       
@@ -258,58 +273,130 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
+// --- Lemon Squeezy Checkout ---
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
-    const stripe = getStripe(c.env);
-    const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
-    let customerId = user?.stripe_customer_id;
-    const priceId = plan === 'monthly' ? c.env.STRIPE_PRICE_ID_MONTHLY : c.env.STRIPE_PRICE_ID_YEARLY;
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [{ price: priceId, quantity: 1 }],
-      mode: 'subscription',
-      success_url: `${c.env.FRONTEND_URL}/?payment=success`,
-      cancel_url: `${c.env.FRONTEND_URL}/?payment=canceled`,
-      customer: customerId || undefined,
-      customer_email: customerId ? undefined : email,
-      metadata: { email }
-    });
-    return c.json({ url: session.url });
-  } catch(e: any) { return c.json({ error: e.message }, 500); }
+    
+    // プランに応じたVariant IDを選択
+    const variantId = plan === 'monthly' 
+      ? c.env.LEMON_SQUEEZY_VARIANT_ID_MONTHLY 
+      : c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
+
+    // APIリクエストボディ (JSON:API仕様)
+    const payload = {
+      data: {
+        type: "checkouts",
+        attributes: {
+          checkout_data: {
+            email,
+            custom: { user_email: email } // Webhookでユーザー特定するために埋め込む
+          },
+          checkout_options: {
+            redirect_url: `${c.env.FRONTEND_URL}/?payment=success`, // 決済成功時の戻り先
+          }
+        },
+        relationships: {
+          store: { data: { type: "stores", id: c.env.LEMON_SQUEEZY_STORE_ID } },
+          variant: { data: { type: "variants", id: variantId } }
+        }
+      }
+    };
+
+    const data: any = await callLemonSqueezy('checkouts', 'POST', c.env.LEMON_SQUEEZY_API_KEY, payload);
+    
+    if (data?.data?.attributes?.url) {
+      return c.json({ url: data.data.attributes.url });
+    } else {
+      throw new Error("Failed to create checkout");
+    }
+  } catch(e: any) {
+    return c.json({ error: e.message }, 500);
+  }
 });
 
+// --- Lemon Squeezy Portal ---
 app.post('/api/portal', async (c) => {
   try {
     const { email } = await c.req.json();
-    const stripe = getStripe(c.env);
+    
+    // DBからCustomer IDを取得 (Stripeのカラムを流用)
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
-    if (!user || !user.stripe_customer_id) return c.json({ error: "No billing information found" }, 404);
-    const session = await stripe.billingPortal.sessions.create({ customer: user.stripe_customer_id, return_url: c.env.FRONTEND_URL });
-    return c.json({ url: session.url });
-  } catch (e: any) { return c.json({ error: e.message }, 500); }
+    
+    if (!user || !user.stripe_customer_id) {
+      return c.json({ error: "No billing information found" }, 404);
+    }
+
+    // Customer APIからポータルURLを取得
+    const data: any = await callLemonSqueezy(`customers/${user.stripe_customer_id}`, 'GET', c.env.LEMON_SQUEEZY_API_KEY);
+    
+    const portalUrl = data?.data?.attributes?.urls?.customer_portal;
+    if (portalUrl) {
+      return c.json({ url: portalUrl });
+    } else {
+      throw new Error("Portal URL not found");
+    }
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
 });
 
+// --- Lemon Squeezy Webhook ---
 app.post('/api/webhook', async (c) => {
-  const stripe = getStripe(c.env);
-  const signature = c.req.header('stripe-signature');
-  const body = await c.req.text();
-  let event;
+  const secret = c.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
+  const signature = c.req.header('x-signature');
+  const bodyText = await c.req.text();
+
+  // 1. 署名検証 (HMAC SHA256)
+  if (!signature) return c.text('No signature', 400);
+  
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sigBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(bodyText));
+  const hashArray = Array.from(new Uint8Array(sigBuffer));
+  const hexSignature = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+  if (hexSignature !== signature) return c.text('Invalid signature', 400);
+
+  // 2. イベント処理
+  const body = JSON.parse(bodyText);
+  const eventName = body.meta.event_name;
+  const customData = body.meta.custom_data || {}; // Checkout時に埋め込んだデータ
+  const attributes = body.data.attributes;
+
   try {
-    if (!signature) throw new Error("No signature");
-    event = await stripe.webhooks.constructEventAsync(body, signature, c.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err: any) { return c.text(`Webhook Error: ${err.message}`, 400); }
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object as Stripe.Checkout.Session;
-    const email = session.metadata?.email || session.customer_details?.email;
-    const customerId = session.customer as string;
-    if (email && customerId) await c.env.DB.prepare("UPDATE users SET is_pro = 1, stripe_customer_id = ? WHERE email = ?").bind(customerId, email).run();
+    // サブスク作成・更新時
+    if (eventName === 'subscription_created' || eventName === 'subscription_updated') {
+      const email = attributes.user_email || customData.user_email;
+      const customerId = attributes.customer_id; // Lemon SqueezyのCustomer ID
+      const status = attributes.status; // 'active', 'on_trial', etc.
+
+      // statusが有効ならPro化
+      const isPro = (status === 'active' || status === 'on_trial') ? 1 : 0;
+
+      if (email) {
+        await c.env.DB.prepare(
+          "UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?"
+        ).bind(isPro, customerId, email).run();
+      }
+    }
+
+    // サブスク解約・期限切れ時
+    if (eventName === 'subscription_cancelled' || eventName === 'subscription_expired') {
+       const email = attributes.user_email || customData.user_email;
+       if (email) {
+         await c.env.DB.prepare(
+           "UPDATE users SET is_pro = 0 WHERE email = ?"
+         ).bind(email).run();
+       }
+    }
+  } catch (e) {
+    console.error(e);
+    return c.text('DB Update Failed', 500);
   }
-  if (event.type === 'customer.subscription.deleted') {
-    const subscription = event.data.object as Stripe.Subscription;
-    const customerId = subscription.customer as string;
-    await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?").bind(customerId).run();
-  }
+
   return c.text('Received', 200);
 });
 
