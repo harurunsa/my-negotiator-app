@@ -22,6 +22,30 @@ app.use('/*', cors())
 
 const DAILY_LIMIT = 5;
 
+// --- PPP設定 (購買力平価) ---
+// 国コード (ISO 3166-1 alpha-2) と Lemon Squeezyのクーポンコードの対応
+const PPP_DISCOUNTS: { [key: string]: string } = {
+  // 50% OFF (低所得国)
+  'IN': 'PPP50', // India
+  'BR': 'PPP50', // Brazil
+  'ID': 'PPP50', // Indonesia
+  'PH': 'PPP50', // Philippines
+  'VN': 'PPP50', // Vietnam
+  'EG': 'PPP50', // Egypt
+  'NG': 'PPP50', // Nigeria
+  'BD': 'PPP50', // Bangladesh
+  'PK': 'PPP50', // Pakistan
+  
+  // 30% OFF (中所得国)
+  'CN': 'PPP30', // China
+  'MX': 'PPP30', // Mexico
+  'TH': 'PPP30', // Thailand
+  'TR': 'PPP30', // Turkey
+  'MY': 'PPP30', // Malaysia
+  'RU': 'PPP30', // Russia
+  'AR': 'PPP30', // Argentina
+};
+
 // --- プロンプト定義 ---
 const ARCHETYPES = {
   empathy: {
@@ -290,7 +314,7 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
-// --- ★ CHECKOUT (修正済み: Payload構造をLemon Squeezy仕様に適合) ---
+// --- ★ CHECKOUT (PPP Enabled) ---
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
@@ -310,17 +334,27 @@ app.post('/api/checkout', async (c) => {
       throw new Error(`Server Error: Missing Variant ID for plan '${plan}'`);
     }
 
-    // ★修正箇所: redirect_url を product_options に移動し、checkout_options を削除
-    const payload = {
+    // ★ PPPロジック: Cloudflareヘッダーから国コードを取得
+    const country = c.req.header('cf-ipcountry');
+    let discountCode = undefined;
+
+    if (country && PPP_DISCOUNTS[country]) {
+      discountCode = PPP_DISCOUNTS[country];
+      console.log(`[PPP] Applying discount ${discountCode} for country ${country}`);
+    }
+
+    // Checkout作成 (redirect_urlの場所を修正済み)
+    const payload: any = {
       data: {
         type: "checkouts",
         attributes: {
           checkout_data: {
             email,
-            custom: { user_email: email }
+            custom: { user_email: email },
+            // ★割引コードがあれば適用
+            ...(discountCode ? { discount_code: discountCode } : {})
           },
           product_options: { 
-             // Lemon Squeezy APIでは redirect_url は product_options 内に配置します
              redirect_url: `${c.env.FRONTEND_URL}/?payment=success`
           }
         },
