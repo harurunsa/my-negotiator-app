@@ -16,7 +16,7 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// CORS制限 (本番運用向け)
+// CORS制限
 app.use('/*', async (c, next) => {
   const corsMiddleware = cors({
     origin: c.env.FRONTEND_URL || '*',
@@ -49,7 +49,7 @@ const MESSAGES: any = {
     limit_reached: "無料版の制限に達しました。シェアで回復するか、Proへ！",
     complete: "🎉 すべてのタスクが完了しました！素晴らしい達成です！次はどうしますか？",
     next_prefix: "👍 ナイス！次はこれです: ",
-    progress: (cur: number, tot: number) => `(${cur}/${tot})`
+    progress: (cur: number, tot: number) => `(進捗: ${cur}/${tot})`
   },
   en: { 
     limit_reached: "Free limit reached. Share or Upgrade!",
@@ -150,6 +150,7 @@ app.post('/api/chat', async (c) => {
     const langMap: {[key:string]: string} = { ja: 'Japanese', en: 'English', pt: 'Portuguese', es: 'Spanish', id: 'Indonesian' };
     const targetLangName = langMap[lang] || 'English';
     
+    // User Check
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
@@ -166,7 +167,7 @@ app.post('/api/chat', async (c) => {
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
 
-    // --- Action: NEXT (APIなしで高速応答) ---
+    // --- Action: NEXT (APIなし) ---
     if (action === 'next') {
       let nextIndex = taskIndex + 1;
 
@@ -174,7 +175,6 @@ app.post('/api/chat', async (c) => {
         const nextTask = currentTaskList[nextIndex];
         const completedTask = currentTaskList[taskIndex];
         
-        // 進捗表示
         const progressText = t.progress ? ` ${t.progress(nextIndex + 1, currentTaskList.length)}` : "";
         
         const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
@@ -206,14 +206,12 @@ app.post('/api/chat', async (c) => {
     const currentTaskText = currentTaskList[taskIndex] || "None";
     const remainingTasks = currentTaskList.slice(taskIndex + 1); 
     
-    // ★現在のプラン情報をプロンプトに詳しく入れる
     const planContext = currentTaskList.length > 0 
       ? `[Current Plan Status]: Working on step ${taskIndex + 1}/${currentTaskList.length} "${currentTaskText}". Future steps: ${JSON.stringify(remainingTasks)}.` 
       : "[Current Plan Status]: No active plan.";
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
-    // ★修正: Retry時の論理破綻を防ぐプロンプト
     const systemInstruction = `
       You are an Executive Function Augmentation AI.
       [Language]: Reply in **${targetLangName}**.
@@ -227,7 +225,7 @@ app.post('/api/chat', async (c) => {
       1. **IF 'RETRY' (Impossible)**:
          - The user cannot do "${currentTaskText}".
          - Break "${currentTaskText}" down into 2-3 tiny micro-steps.
-         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done (e.g. "Check if the floor looks better").
+         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done.
          - Output these micro-steps in "new_task_list".
          - Be empathetic.
          
@@ -235,13 +233,13 @@ app.post('/api/chat', async (c) => {
          - If user input is a NEW goal, create a step-by-step checklist in "new_task_list".
       
       3. **IF 'NORMAL' (Chat/Motivation)**:
-         - If user is just chatting or asking for advice *without* changing the goal, **DO NOT** return "new_task_list". 
+         - If user is just chatting, **DO NOT** return "new_task_list". 
          - Just return "reply". Keep the current plan active.
 
       [OUTPUT FORMAT]: JSON ONLY.
       {
         "reply": "Conversational response",
-        "new_task_list": ["step1", "step2"...] (Optional: Only if planning/re-planning),
+        "new_task_list": ["step1", "step2"...] (Optional),
         "timer_seconds": 180,
         "detected_goal": "Goal String"
       }
@@ -275,8 +273,6 @@ app.post('/api/chat', async (c) => {
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
       if (action === 'retry') {
-        // Retry時: [新しいマイクロタスク] + [残りのタスク]
-        // これで「床の一つ」を拾った後に、ちゃんと「床の残り」や「机」へ進めるようになります
         finalTaskList = [...result.new_task_list, ...remainingTasks];
       } else {
         finalTaskList = result.new_task_list;
@@ -298,9 +294,31 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// 他のルートは変更なし
+// --- 他のルート ---
 app.post('/api/feedback', async (c) => { /*...*/ return c.json({streak:0}); });
-app.post('/api/share-recovery', async (c) => { /*...*/ return c.json({success:true}); });
+
+// ★ 修正: シェア回復API
+app.post('/api/share-recovery', async (c) => {
+  try {
+    const { email } = await c.req.json();
+    console.log(`[Share Recovery] Attempting reset for: ${email}`);
+    
+    const result = await c.env.DB.prepare("UPDATE users SET usage_count = 0 WHERE email = ?").bind(email).run();
+    
+    console.log(`[Share Recovery] DB Result:`, JSON.stringify(result));
+
+    // 更新された行があるか確認 (D1仕様)
+    if (result.meta.changes > 0) {
+       return c.json({ success: true, message: "Usage limit reset!" });
+    } else {
+       console.warn(`[Share Recovery] User not found: ${email}`);
+       return c.json({ success: false, error: "User not found" }, 404);
+    }
+  } catch(e: any) { 
+    console.error(`[Share Recovery] Error:`, e);
+    return c.json({ error: "DB Error", details: e.message }, 500); 
+  }
+});
 
 app.post('/api/checkout', async (c) => {
   try {
