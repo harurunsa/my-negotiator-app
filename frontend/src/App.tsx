@@ -147,7 +147,6 @@ function App() {
   const [currentGoal, setCurrentGoal] = useState<string>("");
   const [showLimitModal, setShowLimitModal] = useState(false);
   
-  // ブラウザ設定 or URLパラメータ or デフォルトの順で言語決定
   const [lang, setLang] = useState<LangCode>(() => {
     const params = new URLSearchParams(window.location.search);
     const urlLang = params.get('lang');
@@ -198,7 +197,6 @@ function App() {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [timerActive, timeLeft]);
 
-  // 言語切り替え & DB保存
   const handleLangChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newLang = e.target.value as LangCode;
     setLang(newLang);
@@ -270,20 +268,29 @@ function App() {
     }
   };
 
+  // ★修正: シェア時に画面上のカウントもリセットする
   const handleShare = async () => {
     if (!user) return;
     const text = encodeURIComponent(`ADHDの脳内会議を代行してくれるAIアプリ「Negotiator」を使ってみた！\n#MyNegotiatorApp`);
     const url = encodeURIComponent(window.location.href);
     window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank');
 
-    await fetch(`${API_URL}/api/share-recovery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: user.email })
-    });
-    
-    setShowLimitModal(false);
-    alert("回復しました！(Chat Reset)");
+    try {
+      await fetch(`${API_URL}/api/share-recovery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email })
+      });
+      
+      // ★追加: フロントエンドの状態も即座にリセット
+      setUser(prev => prev ? { ...prev, usage_count: 0 } : null);
+      
+      setShowLimitModal(false);
+      alert("回復しました！(Chat Reset)");
+    } catch (e) {
+      console.error(e);
+      alert("エラーが発生しました");
+    }
   };
 
   const sendMessage = async (manualMessage: string | null, action: 'normal' | 'retry' | 'next' = 'normal') => {
@@ -326,7 +333,7 @@ function App() {
       setChatLog(prev => [...prev, { 
         role: "ai", 
         text: data.reply, 
-        used_archetype: data.used_archetype, // 修正箇所: used_style -> used_archetype かもしれませんが、バックエンドに合わせて調整
+        used_archetype: data.used_archetype,
         timer_seconds: data.timer_seconds,
         feedback_done: false
       }]);
@@ -721,23 +728,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     animation: 'float 15s infinite ease-in-out reverse'
   },
   
-  chatContainer: { flex: 1, 
-    display: 'flex', 
-    flexDirection: 'column', 
-    paddingTop: '70px',
-    minHeight: 0, 
-    position: 'relative'
-  }, 
-  chatScrollArea: { 
-    flex: 1, 
-    overflowY: 'auto', 
-    padding: '0 15px 20px 15px', 
-    display: 'flex', 
-    flexDirection: 'column', 
-    gap: '20px',
-    scrollBehavior: 'smooth'
-  },
-  
+  chatContainer: { flex: 1, display: 'flex', flexDirection: 'column', paddingTop: '70px' }, 
+  chatScrollArea: { flex: 1, overflowY: 'auto', padding: '0 15px 20px 15px', display: 'flex', flexDirection: 'column', gap: '20px' },
   emptyState: { textAlign: 'center', marginTop: '100px', color: '#999', lineHeight: '1.8' },
   messageRow: { display: 'flex', width: '100%' },
   systemMessage: { fontSize: '0.75rem', color: '#888', background: '#eef2f6', padding: '6px 14px', borderRadius: '20px', fontWeight: '600' },
