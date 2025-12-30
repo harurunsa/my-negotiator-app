@@ -4,9 +4,7 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
-// --- 多言語翻訳辞書 ---
 const TRANSLATIONS = {
-  // 日本語
   ja: {
     logo: "Negotiator",
     goal_prefix: "Running:",
@@ -33,7 +31,6 @@ const TRANSLATIONS = {
     btn_monthly: "or Monthly Plan",
     manage: "管理"
   },
-  // English
   en: {
     logo: "Negotiator",
     goal_prefix: "Goal:",
@@ -60,7 +57,6 @@ const TRANSLATIONS = {
     btn_monthly: "or Monthly Plan",
     manage: "Manage"
   },
-  // Portuguese (Português)
   pt: {
     logo: "Negotiator",
     goal_prefix: "Meta:",
@@ -87,7 +83,6 @@ const TRANSLATIONS = {
     btn_monthly: "ou Plano Mensal",
     manage: "Gerenciar"
   },
-  // Spanish (Español)
   es: {
     logo: "Negotiator",
     goal_prefix: "Meta:",
@@ -114,7 +109,6 @@ const TRANSLATIONS = {
     btn_monthly: "o Plan Mensual",
     manage: "Gestionar"
   },
-  // Indonesian (Bahasa Indonesia)
   id: {
     logo: "Negotiator",
     goal_prefix: "Tujuan:",
@@ -153,8 +147,12 @@ function App() {
   const [currentGoal, setCurrentGoal] = useState<string>("");
   const [showLimitModal, setShowLimitModal] = useState(false);
   
-  // ブラウザの言語設定から初期言語を推測
+  // ブラウザ設定 or URLパラメータ or デフォルトの順で言語決定
   const [lang, setLang] = useState<LangCode>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlLang = params.get('lang');
+    if (urlLang && ['ja', 'en', 'pt', 'es', 'id'].includes(urlLang)) return urlLang as LangCode;
+
     const navLang = navigator.language.split('-')[0];
     if (['ja', 'en', 'pt', 'es', 'id'].includes(navLang)) return navLang as LangCode;
     return 'en';
@@ -176,6 +174,13 @@ function App() {
       const name = params.get('name') || "";
       const streak = parseInt(params.get('streak') || '0');
       const is_pro = parseInt(params.get('pro') || '0');
+      
+      // ログインリダイレクト時に言語指定があれば反映
+      const urlLang = params.get('lang');
+      if (urlLang && ['ja', 'en', 'pt', 'es', 'id'].includes(urlLang)) {
+        setLang(urlLang as LangCode);
+      }
+
       setUser({ email, name, streak, is_pro, usage_count: 0 });
       window.history.replaceState({}, '', '/');
     }
@@ -194,11 +199,20 @@ function App() {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [timerActive, timeLeft]);
 
-  // 言語切り替え (サイクル式)
-  const toggleLang = () => {
-    const order: LangCode[] = ['ja', 'en', 'pt', 'es', 'id'];
-    const currentIndex = order.indexOf(lang);
-    setLang(order[(currentIndex + 1) % order.length]);
+  // ★言語切り替え & DB保存
+  const handleLangChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newLang = e.target.value as LangCode;
+    setLang(newLang);
+    
+    if (user) {
+      try {
+        await fetch(`${API_URL}/api/language`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: user.email, language: newLang })
+        });
+      } catch(err) { console.error("Failed to save language", err); }
+    }
   };
 
   const handleTimerComplete = () => {
@@ -299,7 +313,7 @@ function App() {
           action, 
           prev_context: lastAiMsg,
           current_goal: currentGoal,
-          lang // 言語コードを送る
+          lang 
         }),
       });
       const data = await res.json();
@@ -466,9 +480,14 @@ function App() {
         </div>
         
         <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
-          <button onClick={toggleLang} style={styles.langBtn}>
-            {lang.toUpperCase()}
-          </button>
+          {/* 言語選択プルダウン */}
+          <select value={lang} onChange={handleLangChange} style={styles.langSelect}>
+            <option value="ja">JP</option>
+            <option value="en">EN</option>
+            <option value="pt">PT</option>
+            <option value="es">ES</option>
+            <option value="id">ID</option>
+          </select>
           
           {user && (
              <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
@@ -639,6 +658,11 @@ const styles: { [key: string]: React.CSSProperties } = {
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
   goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   
+  // ★追加: 言語選択プルダウンのスタイル
+  langSelect: {
+    padding: '5px 10px', fontSize: '0.8rem', borderRadius: '15px', border: '1px solid #ddd',
+    background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555', outline: 'none'
+  },
   langBtn: {
     padding: '5px 10px', fontSize: '0.7rem', borderRadius: '15px', border: '1px solid #ddd',
     background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555'
