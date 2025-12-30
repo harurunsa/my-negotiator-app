@@ -5,6 +5,7 @@ import confetti from 'https://esm.sh/canvas-confetti';
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
 const TRANSLATIONS = {
+  // ... (翻訳データは長いので省略しますが、前回のコードと同じです。そのまま残してください) ...
   ja: {
     logo: "Negotiator",
     goal_prefix: "Running:",
@@ -29,8 +30,7 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweet & Reset (Free)",
     btn_pro: "👑 Upgrade to Pro (Yearly)",
     btn_monthly: "or Monthly Plan",
-    manage: "管理",
-    recover_success: "回復しました！(Chat Reset)"
+    manage: "管理"
   },
   en: {
     logo: "Negotiator",
@@ -56,8 +56,7 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweet & Reset (Free)",
     btn_pro: "👑 Upgrade to Pro (Yearly)",
     btn_monthly: "or Monthly Plan",
-    manage: "Manage",
-    recover_success: "Usage limit reset!"
+    manage: "Manage"
   },
   pt: {
     logo: "Negotiator",
@@ -83,8 +82,7 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweetar & Resetar (Grátis)",
     btn_pro: "👑 Upgrade para Pro (Anual)",
     btn_monthly: "ou Plano Mensal",
-    manage: "Gerenciar",
-    recover_success: "Limite resetado!"
+    manage: "Gerenciar"
   },
   es: {
     logo: "Negotiator",
@@ -110,8 +108,7 @@ const TRANSLATIONS = {
     btn_share: "🐦 Twittear y Reiniciar (Gratis)",
     btn_pro: "👑 Actualizar a Pro (Anual)",
     btn_monthly: "o Plan Mensual",
-    manage: "Gestionar",
-    recover_success: "¡Límite reiniciado!"
+    manage: "Gestionar"
   },
   id: {
     logo: "Negotiator",
@@ -137,8 +134,7 @@ const TRANSLATIONS = {
     btn_share: "🐦 Tweet & Reset (Gratis)",
     btn_pro: "👑 Upgrade ke Pro (Tahunan)",
     btn_monthly: "atau Paket Bulanan",
-    manage: "Kelola",
-    recover_success: "Batas direset!"
+    manage: "Kelola"
   }
 };
 
@@ -184,7 +180,6 @@ function App() {
         setLang(urlLang as LangCode);
       }
 
-      // ★初期化時にusage_countもセット (デフォルト0)
       setUser({ email, name, streak, is_pro, usage_count: 0 });
       window.history.replaceState({}, '', '/');
     }
@@ -206,7 +201,6 @@ function App() {
   const handleLangChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newLang = e.target.value as LangCode;
     setLang(newLang);
-    
     if (user) {
       try {
         await fetch(`${API_URL}/api/language`, {
@@ -274,7 +268,7 @@ function App() {
     }
   };
 
-  // ★修正: シェア後にユーザーの状態(usage_count)をリセットする
+  // ★修正: シェア処理と回復の同期
   const handleShare = async () => {
     if (!user) return;
     const text = encodeURIComponent(`ADHDの脳内会議を代行してくれるAIアプリ「Negotiator」を使ってみた！\n#MyNegotiatorApp`);
@@ -288,15 +282,21 @@ function App() {
         body: JSON.stringify({ email: user.email })
       });
       
-      if (res.ok) {
-        // ★ここ重要: フロントエンド上のカウントも0に戻す
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        // ★重要: フロントエンドの状態も即時更新する
         setUser(prev => prev ? { ...prev, usage_count: 0 } : null);
         
         setShowLimitModal(false);
-        alert(t.recover_success);
+        alert("回復しました！(Energy Refilled ⚡️)");
+      } else {
+        console.error("Share Recovery Failed:", data);
+        alert("回復に失敗しました。もう一度お試しください。");
       }
-    } catch(e) {
+    } catch (e) {
       console.error(e);
+      alert("通信エラーが発生しました。");
     }
   };
 
@@ -336,12 +336,6 @@ function App() {
         setLoading(false);
         return;
       }
-      
-      // AI返答があった場合、使用回数をカウントアップ（フロントエンド側の表示も同期）
-      if (action === 'normal' || action === 'retry') {
-         setUser(prev => prev ? { ...prev, usage_count: (prev.usage_count || 0) + 1 } : null);
-      }
-
       if (data.detected_goal) setCurrentGoal(data.detected_goal);
       setChatLog(prev => [...prev, { 
         role: "ai", 
@@ -763,24 +757,11 @@ const styles: { [key: string]: React.CSSProperties } = {
   timerLabel: { fontSize: '1rem', color: '#888', marginTop: '5px', letterSpacing: '2px', textTransform: 'uppercase', fontWeight: '600' },
   timerCompleteBtn: { marginTop: '60px', background: '#00FFC2', border: 'none', color: '#000', padding: '16px 50px', borderRadius: '50px', fontSize: '1.2rem', fontWeight: '800', cursor: 'pointer', boxShadow: '0 0 30px rgba(0, 255, 194, 0.4)', textTransform: 'uppercase', letterSpacing: '1px' },
 
+  // モーダル用
   modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center' },
   modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
   modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
-  modalBtnPro: { 
-    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
-    color: '#333', 
-    border: '2px solid #fff', 
-    padding: '16px', 
-    borderRadius: '16px', 
-    fontWeight: '800', 
-    cursor: 'pointer', 
-    width: '100%', 
-    fontSize: '1.1rem', 
-    boxShadow: '0 8px 20px rgba(253, 185, 49, 0.5)', 
-    transform: 'scale(1.02)', 
-    position: 'relative',
-    overflow: 'hidden'
-  },
+  modalBtnPro: { background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem', boxShadow: '0 4px 15px rgba(253, 185, 49, 0.4)' },
   modalBtnMonthly: {
     background: 'transparent',
     color: '#888',
