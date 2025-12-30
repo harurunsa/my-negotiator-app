@@ -55,7 +55,7 @@ function extractJson(text: string): string {
   return text.substring(start, end + 1);
 }
 
-// --- Lemon Squeezy API Helper (Improved Debugging) ---
+// --- Lemon Squeezy API Helper ---
 async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
   console.log(`[LemonSqueezy] Request: ${method} /${path}`);
   
@@ -290,27 +290,27 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
-// --- ★ CHECKOUT (Improved) ---
+// --- ★ CHECKOUT (修正済み: Payload構造をLemon Squeezy仕様に適合) ---
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
     
-    // 1. 環境変数のチェック (ログには値を出さない)
-    if (!c.env.LEMON_SQUEEZY_STORE_ID) throw new Error("Server Error: Missing Store ID in Env");
-    if (!c.env.LEMON_SQUEEZY_API_KEY) throw new Error("Server Error: Missing API Key in Env");
+    // 1. 環境変数のチェック
+    if (!c.env.LEMON_SQUEEZY_STORE_ID) throw new Error("Server Error: Missing Store ID");
+    if (!c.env.LEMON_SQUEEZY_API_KEY) throw new Error("Server Error: Missing API Key");
 
-    // 2. Variant IDの選択とチェック
+    // 2. Variant IDの選択
     let variantId = plan === 'monthly' 
       ? c.env.LEMON_SQUEEZY_VARIANT_ID_MONTHLY 
       : c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
 
-    // デフォルトはYearlyへ倒すなど安全策
     if (!variantId && !plan) variantId = c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
 
     if (!variantId) {
-      throw new Error(`Server Error: Missing Variant ID for plan '${plan}'. Check Cloudflare Env Vars.`);
+      throw new Error(`Server Error: Missing Variant ID for plan '${plan}'`);
     }
 
+    // ★修正箇所: redirect_url を product_options に移動し、checkout_options を削除
     const payload = {
       data: {
         type: "checkouts",
@@ -319,12 +319,13 @@ app.post('/api/checkout', async (c) => {
             email,
             custom: { user_email: email }
           },
-          checkout_options: {
-            redirect_url: `${c.env.FRONTEND_URL}/?payment=success`,
+          product_options: { 
+             // Lemon Squeezy APIでは redirect_url は product_options 内に配置します
+             redirect_url: `${c.env.FRONTEND_URL}/?payment=success`
           }
         },
         relationships: {
-          store: { data: { type: "stores", id: c.env.LEMON_SQUEEZY_STORE_ID.toString() } }, // toString()で型安全に
+          store: { data: { type: "stores", id: c.env.LEMON_SQUEEZY_STORE_ID.toString() } },
           variant: { data: { type: "variants", id: variantId.toString() } }
         }
       }
@@ -340,7 +341,6 @@ app.post('/api/checkout', async (c) => {
     }
   } catch(e: any) {
     console.error("Checkout Fatal Error:", e.message);
-    // 詳細なエラーをフロントエンドへ返す
     return c.json({ error: e.message, details: "Check backend logs for more info." }, 500);
   }
 });
