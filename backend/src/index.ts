@@ -134,14 +134,30 @@ app.get('/auth/callback', async (c) => {
   } catch (e: any) { return c.text(`Auth Error: ${e.message}`, 500) }
 })
 
-// --- Language Update API ---
+// --- API Endpoints ---
+
 app.post('/api/language', async (c) => {
   const { email, language } = await c.req.json();
   await c.env.DB.prepare("UPDATE users SET language = ? WHERE email = ?").bind(language, email).run();
   return c.json({ success: true });
 });
 
-// --- AI Chat ---
+// ★追加: お問い合わせ保存API
+app.post('/api/inquiry', async (c) => {
+  try {
+    const { email, message } = await c.req.json();
+    if (!message || message.trim() === "") return c.json({ error: "Empty message" }, 400);
+    
+    await c.env.DB.prepare(
+      "INSERT INTO inquiries (id, email, message, created_at) VALUES (?, ?, ?, ?)"
+    ).bind(crypto.randomUUID(), email, message, Date.now()).run();
+    
+    return c.json({ success: true });
+  } catch(e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en' } = await c.req.json()
@@ -161,88 +177,60 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // タスク状態取得
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
 
-    // --- Action: NEXT (APIなし) ---
     if (action === 'next') {
       let nextIndex = taskIndex + 1;
-
       if (nextIndex < currentTaskList.length) {
         const nextTask = currentTaskList[nextIndex];
         const completedTask = currentTaskList[taskIndex];
-        
         const progressText = t.progress ? ` ${t.progress(nextIndex + 1, currentTaskList.length)}` : "";
         const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
-        
-        await c.env.DB.prepare(
-          "UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?"
-        ).bind(nextIndex, updatedMemory, email).run();
-        
-        return c.json({
-          reply: `${t.next_prefix}${nextTask}${progressText}`,
-          timer_seconds: 180,
-          detected_goal: current_goal,
-          used_archetype: "system_optimized"
-        });
+        await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
+        return c.json({ reply: `${t.next_prefix}${nextTask}${progressText}`, timer_seconds: 180, detected_goal: current_goal, used_archetype: "system_optimized" });
       } else {
         await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
-        return c.json({
-          reply: t.complete,
-          timer_seconds: 0,
-          detected_goal: null,
-          used_archetype: "system_complete"
-        });
+        return c.json({ reply: t.complete, timer_seconds: 0, detected_goal: null, used_archetype: "system_complete" });
       }
     }
 
-    // --- Action: RETRY or NORMAL (APIコール) ---
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
     const currentTaskText = currentTaskList[taskIndex] || "None";
     const remainingTasks = currentTaskList.slice(taskIndex + 1); 
-    
     const planContext = currentTaskList.length > 0 
       ? `[Current Plan Status]: Working on step ${taskIndex + 1}/${currentTaskList.length} "${currentTaskText}". Future steps: ${JSON.stringify(remainingTasks)}.` 
       : "[Current Plan Status]: No active plan.";
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
-    // ★改善されたプロンプト (話の流れを自然にする)
     const systemInstruction = `
       You are an Executive Function Augmentation AI.
       [Language]: Reply in **${targetLangName}**.
       [User Memory]: ${userMemory}
       [Context]: ${safePrevContext}
       ${planContext}
-      
       [GOAL]: ${current_goal || "Infer from user input"}
       
-      [CRITICAL RULE FOR TASK LIST]:
-      - Task items must be **SHORT ACTION PHRASES ONLY** (e.g. "Pick up 5 pens", "Wipe the desk").
-      - DO NOT include conversational filler like "Great job! Next is..." inside the task list item. The system handles that.
+      [CRITICAL RULE]: Task items must be **SHORT ACTION PHRASES ONLY**.
       
       [INSTRUCTIONS]:
       1. **IF 'RETRY' (Impossible)**:
-         - The user cannot do "${currentTaskText}".
          - Break "${currentTaskText}" down into 2-3 tiny micro-steps.
-         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done (e.g. "Check if the area is clean enough to move on").
-         - Output these micro-steps in "new_task_list".
-         - Be empathetic in "reply".
+         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done.
+         - Output in "new_task_list". Be empathetic in "reply".
          
       2. **IF 'NORMAL' (New Goal)**:
-         - If user input is a NEW goal, create a **COMPLETE** step-by-step checklist in "new_task_list".
-         - Do not just give the first step. Give the full path to completion (max 5-7 steps).
+         - Create a **COMPLETE** step-by-step checklist in "new_task_list".
       
       3. **IF 'NORMAL' (Chat/Motivation)**:
-         - If user is just chatting, **DO NOT** return "new_task_list". 
-         - Just return "reply". Keep the current plan active.
+         - If just chatting, **DO NOT** return "new_task_list". Return "reply" only.
 
       [OUTPUT FORMAT]: JSON ONLY.
       {
-        "reply": "Conversational response (encouragement)",
+        "reply": "Conversational response",
         "new_task_list": ["Action 1", "Action 2"...] (Optional),
         "timer_seconds": 180,
         "detected_goal": "Goal String"
@@ -250,38 +238,25 @@ app.post('/api/chat', async (c) => {
     `;
 
     const requestText = `User: ${message} (Action: ${action})`;
-
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\n" + requestText }] }],
-        generationConfig: { response_mime_type: "application/json" }
-      })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\n" + requestText }] }], generationConfig: { response_mime_type: "application/json" } })
     });
 
     const data: any = await response.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     
     let result;
-    try {
-      result = JSON.parse(extractJson(rawText));
-    } catch (e) {
+    try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { 
-        reply: lang === 'ja' ? "申し訳ありません、通信エラーが発生しました。" : "Connection error.",
-        timer_seconds: 60
-      };
+      result = { reply: lang === 'ja' ? "通信エラーが発生しました。" : "Connection error.", timer_seconds: 60 };
     }
 
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
-      if (action === 'retry') {
-        // Retry時: [分解タスク] + [残りのタスク] を結合し、未来の予定を維持する
-        finalTaskList = [...result.new_task_list, ...remainingTasks];
-      } else {
-        finalTaskList = result.new_task_list;
-      }
+      if (action === 'retry') finalTaskList = [...result.new_task_list, ...remainingTasks];
+      else finalTaskList = result.new_task_list;
       await c.env.DB.prepare("UPDATE users SET task_list = ?, current_task_index = 0 WHERE email = ?").bind(JSON.stringify(finalTaskList), email).run();
     }
 
@@ -291,31 +266,20 @@ app.post('/api/chat', async (c) => {
         await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMem, email).run();
       })());
     }
-
     return c.json(result);
-
-  } catch (e: any) {
-    return c.json({ reply: `System Error: ${e.message}`, timer_seconds: 0 });
-  }
+  } catch (e: any) { return c.json({ reply: `System Error: ${e.message}`, timer_seconds: 0 }); }
 })
 
-// --- Share Recovery (DB Log Check) ---
+app.post('/api/feedback', async (c) => { /*...*/ return c.json({streak:0}); });
+
 app.post('/api/share-recovery', async (c) => {
   try {
     const { email } = await c.req.json();
     const result = await c.env.DB.prepare("UPDATE users SET usage_count = 0 WHERE email = ?").bind(email).run();
-    if (result.meta.changes > 0) {
-       return c.json({ success: true, message: "Usage limit reset!" });
-    } else {
-       return c.json({ success: false, error: "User not found" }, 404);
-    }
-  } catch(e: any) { 
-    return c.json({ error: "DB Error", details: e.message }, 500); 
-  }
+    if (result.meta.changes > 0) return c.json({ success: true, message: "Usage limit reset!" });
+    else return c.json({ success: false, error: "User not found" }, 404);
+  } catch(e: any) { return c.json({ error: "DB Error", details: e.message }, 500); }
 });
-
-// Checkout & Other Routes
-app.post('/api/feedback', async (c) => { /*...*/ return c.json({streak:0}); });
 
 app.post('/api/checkout', async (c) => {
   try {
@@ -348,7 +312,18 @@ app.post('/api/checkout', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-app.post('/api/portal', async (c) => { /*...*/ return c.json({url:""}); });
+app.post('/api/portal', async (c) => {
+  try {
+    const { email } = await c.req.json();
+    const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
+    if (!user || !user.stripe_customer_id) return c.json({ error: "No billing information found" }, 404);
+    const data: any = await callLemonSqueezy(`customers/${user.stripe_customer_id}`, 'GET', c.env.LEMON_SQUEEZY_API_KEY);
+    const portalUrl = data?.data?.attributes?.urls?.customer_portal;
+    if (portalUrl) return c.json({ url: portalUrl });
+    else throw new Error("Portal URL not found");
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
+});
+
 app.post('/api/webhook', async (c) => { /*...*/ return c.text('Received'); });
 
 export default app
