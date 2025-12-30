@@ -4,7 +4,9 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
+// --- 多言語翻訳辞書 ---
 const TRANSLATIONS = {
+  // 日本語
   ja: {
     logo: "Negotiator",
     goal_prefix: "Running:",
@@ -22,8 +24,16 @@ const TRANSLATIONS = {
     timer_focus: "FOCUS",
     timer_complete: "Mission Complete",
     system_retry: "😰 ハードルを極限まで下げています...",
-    system_next: "🚀 ナイス！次のステップへ！"
+    system_next: "🚀 ナイス！次のステップへ！",
+    energy_low: "Energy Low",
+    unlock_potential: "Unlock Potential",
+    limit_desc: "無料版の会話上限(1日5回)に達しました。\nシェアして回復するか、Pro版で無制限に。",
+    btn_share: "🐦 Tweet & Reset (Free)",
+    btn_pro: "👑 Upgrade to Pro (Yearly)",
+    btn_monthly: "or Monthly Plan",
+    manage: "管理"
   },
+  // English
   en: {
     logo: "Negotiator",
     goal_prefix: "Goal:",
@@ -41,9 +51,99 @@ const TRANSLATIONS = {
     timer_focus: "FOCUS",
     timer_complete: "Mission Complete",
     system_retry: "😰 Lowering hurdles to the limit...",
-    system_next: "🚀 Nice! Next step!"
+    system_next: "🚀 Nice! Next step!",
+    energy_low: "Energy Low",
+    unlock_potential: "Unlock Potential",
+    limit_desc: "Daily limit reached.\nShare to reset or Go Pro.",
+    btn_share: "🐦 Tweet & Reset (Free)",
+    btn_pro: "👑 Upgrade to Pro (Yearly)",
+    btn_monthly: "or Monthly Plan",
+    manage: "Manage"
+  },
+  // Portuguese (Português)
+  pt: {
+    logo: "Negotiator",
+    goal_prefix: "Meta:",
+    streak_label: "STREAK",
+    login_badge: "Beta v1.0",
+    hero_title: "Hackeie Sua\nFunção Executiva.",
+    hero_sub: "Externalize o centro de comando do seu cérebro.\nO parceiro de IA definitivo para mentes com TDAH.",
+    btn_login: "Entrar com Google",
+    features: ["🧠 Terceirize o Pensamento", "🎮 Gamifique Sua Vida", "💊 Suplemento Digital"],
+    empty_icon: "🧠",
+    empty_text: "\"Meu quarto está uma bagunça...\" \"Não consigo responder...\"\nDescarregue esses pensamentos aqui.",
+    btn_start: "🔥 Vamos Nessa",
+    btn_impossible: "😰 Sem chance...",
+    placeholder: "Despeje seus pensamentos...",
+    timer_focus: "FOCO",
+    timer_complete: "Missão Cumprida",
+    system_retry: "😰 Diminuindo a dificuldade ao máximo...",
+    system_next: "🚀 Boa! Próximo passo!",
+    energy_low: "Energia Baixa",
+    unlock_potential: "Desbloqueie Potencial",
+    limit_desc: "Limite diário atingido.\nCompartilhe para resetar ou vire Pro.",
+    btn_share: "🐦 Tweetar & Resetar (Grátis)",
+    btn_pro: "👑 Upgrade para Pro (Anual)",
+    btn_monthly: "ou Plano Mensal",
+    manage: "Gerenciar"
+  },
+  // Spanish (Español)
+  es: {
+    logo: "Negotiator",
+    goal_prefix: "Meta:",
+    streak_label: "RACHA",
+    login_badge: "Beta v1.0",
+    hero_title: "Hackea Tu\nFunción Ejecutiva.",
+    hero_sub: "Externaliza el centro de mando de tu cerebro.\nEl socio de IA definitivo para mentes con TDAH.",
+    btn_login: "Iniciar con Google",
+    features: ["🧠 Externaliza Pensamientos", "🎮 Gamifica Tu Vida", "💊 Suplemento Digital"],
+    empty_icon: "🧠",
+    empty_text: "\"Mi cuarto es un desastre...\" \"No puedo responder...\"\nDescarga esos pensamientos aquí.",
+    btn_start: "🔥 ¡Vamos!",
+    btn_impossible: "😰 Imposible...",
+    placeholder: "Escribe tus pensamientos...",
+    timer_focus: "ENFOQUE",
+    timer_complete: "Misión Cumplida",
+    system_retry: "😰 Bajando la dificultad al límite...",
+    system_next: "🚀 ¡Bien! ¡Siguiente paso!",
+    energy_low: "Energía Baja",
+    unlock_potential: "Libera Tu Potencial",
+    limit_desc: "Límite diario alcanzado.\nComparte para reiniciar o hazte Pro.",
+    btn_share: "🐦 Twittear y Reiniciar (Gratis)",
+    btn_pro: "👑 Actualizar a Pro (Anual)",
+    btn_monthly: "o Plan Mensual",
+    manage: "Gestionar"
+  },
+  // Indonesian (Bahasa Indonesia)
+  id: {
+    logo: "Negotiator",
+    goal_prefix: "Tujuan:",
+    streak_label: "STREAK",
+    login_badge: "Beta v1.0",
+    hero_title: "Retas Fungsi\nEksekutif Anda.",
+    hero_sub: "Eksternalisasi pusat komando otak Anda.\nMitra AI terbaik untuk pemikiran ADHD.",
+    btn_login: "Masuk dengan Google",
+    features: ["🧠 Alihdayakan Pikiran", "🎮 Gamifikasi Hidup", "💊 Suplemen Digital"],
+    empty_icon: "🧠",
+    empty_text: "\"Kamarku berantakan...\" \"Gak bisa bales chat...\"\nTumpahkan pikiran itu di sini.",
+    btn_start: "🔥 Ayo Lakukan",
+    btn_impossible: "😰 Gak mungkin...",
+    placeholder: "Tumpahkan pikiranmu...",
+    timer_focus: "FOKUS",
+    timer_complete: "Misi Selesai",
+    system_retry: "😰 Menurunkan kesulitan ke batas minimum...",
+    system_next: "🚀 Bagus! Langkah selanjutnya!",
+    energy_low: "Energi Rendah",
+    unlock_potential: "Buka Potensi",
+    limit_desc: "Batas harian tercapai.\nBagikan untuk reset atau Upgrade.",
+    btn_share: "🐦 Tweet & Reset (Gratis)",
+    btn_pro: "👑 Upgrade ke Pro (Tahunan)",
+    btn_monthly: "atau Paket Bulanan",
+    manage: "Kelola"
   }
 };
+
+type LangCode = 'ja' | 'en' | 'pt' | 'es' | 'id';
 
 function App() {
   const [user, setUser] = useState<{email: string, name: string, streak: number, is_pro: number, usage_count?: number} | null>(null);
@@ -53,9 +153,13 @@ function App() {
   const [currentGoal, setCurrentGoal] = useState<string>("");
   const [showLimitModal, setShowLimitModal] = useState(false);
   
-  const [lang, setLang] = useState<'ja' | 'en'>(
-    navigator.language.startsWith('en') ? 'en' : 'ja'
-  );
+  // ブラウザの言語設定から初期言語を推測
+  const [lang, setLang] = useState<LangCode>(() => {
+    const navLang = navigator.language.split('-')[0];
+    if (['ja', 'en', 'pt', 'es', 'id'].includes(navLang)) return navLang as LangCode;
+    return 'en';
+  });
+  
   const t = TRANSLATIONS[lang];
 
   const [timerActive, setTimerActive] = useState(false);
@@ -90,8 +194,11 @@ function App() {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [timerActive, timeLeft]);
 
+  // 言語切り替え (サイクル式)
   const toggleLang = () => {
-    setLang(prev => prev === 'ja' ? 'en' : 'ja');
+    const order: LangCode[] = ['ja', 'en', 'pt', 'es', 'id'];
+    const currentIndex = order.indexOf(lang);
+    setLang(order[(currentIndex + 1) % order.length]);
   };
 
   const handleTimerComplete = () => {
@@ -103,7 +210,6 @@ function App() {
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
-  // ★修正: planを受け取り、エラー詳細をコンソールに出す
   const handleUpgrade = async (plan: 'yearly' | 'monthly') => {
     if (!user) return;
     try {
@@ -118,7 +224,7 @@ function App() {
       if (data.url) {
         window.location.href = data.url;
       } else {
-        console.error("Checkout Error Details:", data); // ★ここで詳細ログを確認！
+        console.error("Checkout Error Details:", data);
         alert(`Checkout Failed: ${data.error || "Unknown Error"}`);
       }
     } catch (e) { 
@@ -193,7 +299,7 @@ function App() {
           action, 
           prev_context: lastAiMsg,
           current_goal: currentGoal,
-          lang 
+          lang // 言語コードを送る
         }),
       });
       const data = await res.json();
@@ -293,28 +399,24 @@ function App() {
             <div style={{fontSize:'3rem', marginBottom:'10px'}}>
               {(user?.usage_count ?? 0) >= 5 ? "🔋" : "🚀"}
             </div>
-            <h2 style={{margin:'0 0 10px 0', color:'#333'}}>
-              {(user?.usage_count ?? 0) >= 5 ? "Energy Low" : "Unlock Potential"}
-            </h2>
-            <p style={{color:'#666', lineHeight:'1.5'}}>
-              {lang === 'ja' 
-                ? "Proプランで無制限の脳内会議を。\n年額プランなら2ヶ月分無料です！"
-                : "Unlimited access with Pro.\nGet 2 months free with Yearly plan!"}
+            <h2 style={{margin:'0 0 10px 0', color:'#333'}}>{t.energy_low}</h2>
+            <p style={{color:'#666', lineHeight:'1.5', whiteSpace:'pre-line'}}>
+              {t.limit_desc}
             </p>
             <div style={{display:'flex', gap:'10px', flexDirection:'column', marginTop:'20px'}}>
               <button onClick={handleShare} style={styles.modalBtnShare}>
-                🐦 Tweet & Reset (Free)
+                {t.btn_share}
               </button>
               
               <div style={{width: '100%', height: '1px', background: '#eee', margin: '5px 0'}}></div>
 
               <button onClick={() => handleUpgrade('yearly')} style={styles.modalBtnPro}>
                 <div style={{fontSize: '0.8rem', opacity: 0.9, marginBottom: '2px'}}>✨ 2 Months Free</div>
-                👑 Upgrade to Pro (Yearly)
+                {t.btn_pro}
               </button>
 
               <button onClick={() => handleUpgrade('monthly')} style={styles.modalBtnMonthly}>
-                or Monthly Plan
+                {t.btn_monthly}
               </button>
               
               <button onClick={() => setShowLimitModal(false)} style={styles.modalBtnClose}>
@@ -365,14 +467,14 @@ function App() {
         
         <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
           <button onClick={toggleLang} style={styles.langBtn}>
-            {lang === 'ja' ? 'EN' : 'JP'}
+            {lang.toUpperCase()}
           </button>
           
           {user && (
              <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
                {user.is_pro === 1 ? (
                  <button onClick={handlePortal} style={styles.portalBtn}>
-                   ⚙️ {lang === 'ja' ? '管理' : 'Manage'}
+                   ⚙️ {t.manage}
                  </button>
                ) : (
                  <button onClick={() => setShowLimitModal(true)} style={styles.upgradeHeaderBtn}>
@@ -598,7 +700,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     animation: 'float 15s infinite ease-in-out reverse'
   },
   
-  // 重要: スクロール制御のため minHeight: 0 を追加
   chatContainer: { 
     flex: 1, 
     display: 'flex', 
@@ -607,7 +708,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     minHeight: 0, 
     position: 'relative'
   }, 
-  // 重要: overflowY: auto でスクロール領域を定義
   chatScrollArea: { 
     flex: 1, 
     overflowY: 'auto', 
