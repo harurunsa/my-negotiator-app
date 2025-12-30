@@ -18,9 +18,9 @@ const app = new Hono<{ Bindings: Bindings }>()
 app.use('/*', cors())
 
 const DAILY_LIMIT = 5;
-const MAX_CONTEXT_CHARS = 1000;
+const MAX_CONTEXT_CHARS = 1500; // 文脈保持のため少し増量
 
-// PPP & Language Settings
+// --- PPP設定 ---
 const PPP_DISCOUNTS: { [key: string]: string } = {
   'IN': 'PPP50', 'BR': 'PPP50', 'ID': 'PPP50', 'PH': 'PPP50', 
   'VN': 'PPP50', 'EG': 'PPP50', 'NG': 'PPP50', 'BD': 'PPP50', 'PK': 'PPP50',
@@ -35,12 +35,12 @@ const COUNTRY_TO_LANG: { [key: string]: string } = {
 const MESSAGES: any = {
   ja: { 
     limit_reached: "無料版の制限に達しました。シェアで回復するか、Proへ！",
-    complete: "🎉 すべてのタスクが完了しました！素晴らしい達成です！",
+    complete: "🎉 すべてのタスクが完了しました！素晴らしい達成です！次はどうしますか？",
     next_prefix: "👍 ナイス！次はこれです: "
   },
   en: { 
     limit_reached: "Free limit reached. Share or Upgrade!",
-    complete: "🎉 All tasks completed! Amazing work!",
+    complete: "🎉 All tasks completed! Amazing work! What's next?",
     next_prefix: "👍 Nice! Next up: "
   },
   pt: { limit_reached: "Limite atingido.", complete: "🎉 Tarefas concluídas!", next_prefix: "👍 Boa! Próximo: " },
@@ -48,7 +48,7 @@ const MESSAGES: any = {
   id: { limit_reached: "Batas tercapai.", complete: "🎉 Semua tugas selesai!", next_prefix: "👍 Bagus! Berikutnya: " }
 };
 
-// Helper Functions
+// --- Helper Functions ---
 function extractJson(text: string): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -63,7 +63,6 @@ function truncateContext(text: string): string {
 }
 
 async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
-  console.log(`[LemonSqueezy] Request: ${method} /${path}`);
   const res = await fetch(`https://api.lemonsqueezy.com/v1/${path}`, {
     method,
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/vnd.api+json', 'Content-Type': 'application/vnd.api+json' },
@@ -79,7 +78,7 @@ async function callLemonSqueezy(path: string, method: string, apiKey: string, bo
   return data;
 }
 
-// Auth Routes (省略なし)
+// --- Auth Routes ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -120,14 +119,14 @@ app.get('/auth/callback', async (c) => {
   } catch (e: any) { return c.text(`Auth Error: ${e.message}`, 500) }
 })
 
-// Language Update API
+// --- Language Update API ---
 app.post('/api/language', async (c) => {
   const { email, language } = await c.req.json();
   await c.env.DB.prepare("UPDATE users SET language = ? WHERE email = ?").bind(language, email).run();
   return c.json({ success: true });
 });
 
-// --- ★ AI Chat (修正版) ---
+// --- ★ AI Chat (堅牢化 & コスト最適化版) ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en' } = await c.req.json()
@@ -150,16 +149,26 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- Action: NEXT (No API Call) ---
-    if (action === 'next') {
-      let taskList = [];
-      try { taskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
-      
-      let nextIndex = (user.current_task_index || 0) + 1;
+    // 現在のタスク状態を取得
+    let currentTaskList: string[] = [];
+    try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
+    let taskIndex = user.current_task_index || 0;
 
-      if (nextIndex < taskList.length) {
-        const nextTask = taskList[nextIndex];
-        await c.env.DB.prepare("UPDATE users SET current_task_index = ? WHERE email = ?").bind(nextIndex, email).run();
+    // --- ★ Action: NEXT (No API Call + Memory Sync) ---
+    if (action === 'next') {
+      let nextIndex = taskIndex + 1;
+
+      if (nextIndex < currentTaskList.length) {
+        const nextTask = currentTaskList[nextIndex];
+        const completedTask = currentTaskList[taskIndex]; // 直前のタスク
+
+        // ★重要: APIを呼ばない代わりに、DBの記憶に「完了したこと」を追記する
+        const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
+        
+        await c.env.DB.prepare(
+          "UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?"
+        ).bind(nextIndex, updatedMemory, email).run();
+        
         return c.json({
           reply: `${t.next_prefix}${nextTask}`,
           timer_seconds: 180,
@@ -167,6 +176,8 @@ app.post('/api/chat', async (c) => {
           used_archetype: "system_optimized"
         });
       } else {
+        // 全完了: リストをリセット
+        await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
         return c.json({
           reply: t.complete,
           timer_seconds: 0,
@@ -176,18 +187,17 @@ app.post('/api/chat', async (c) => {
       }
     }
 
-    // --- Action: RETRY or NORMAL (Call API) ---
+    // --- ★ Action: RETRY or NORMAL (Call API) ---
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
+    const currentTaskText = currentTaskList[taskIndex] || "None";
     
-    // 現在のタスク状態を取得 (Retry時に使う)
-    let currentTaskList = [];
-    try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
-    const currentIndex = user.current_task_index || 0;
-    const currentTaskText = currentTaskList[currentIndex] || "Unknown Task";
-    
-    // 未来のタスクを保持するためのリスト
-    const remainingTasks = currentTaskList.slice(currentIndex + 1); 
+    // ★重要: AIに「現在の進捗状況」を教える
+    // これにより、AIは「残りのタスク」を考慮してプランを練り直せる
+    const remainingTasks = currentTaskList.slice(taskIndex + 1); 
+    const planContext = currentTaskList.length > 0 
+      ? `[Current Plan Status]: Working on "${currentTaskText}". Future steps: ${JSON.stringify(remainingTasks)}.` 
+      : "[Current Plan Status]: No active plan.";
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
@@ -196,7 +206,7 @@ app.post('/api/chat', async (c) => {
       [Language]: Reply in **${targetLangName}**.
       [User Memory]: ${userMemory}
       [Context]: ${safePrevContext}
-      [Current Task User is Stuck On]: "${currentTaskText}"
+      ${planContext}
       
       [GOAL]: ${current_goal || "Infer from user input"}
       
@@ -205,18 +215,18 @@ app.post('/api/chat', async (c) => {
          - The user cannot do "${currentTaskText}".
          - Break "${currentTaskText}" down into 2-3 tiny micro-steps.
          - Output these micro-steps in "new_task_list".
-         - Be empathetic and apologetic.
+         - Be empathetic.
          
       2. **IF 'NORMAL' (New Goal)**:
-         - If the user input is a NEW goal (e.g. "Clean room"), create a step-by-step checklist in "new_task_list".
+         - If user input is a NEW goal, create a step-by-step checklist in "new_task_list".
       
       3. **IF 'NORMAL' (Chat/Motivation)**:
-         - If the user is just chatting, complaining, or asking for motivation *without* changing the goal, **DO NOT** return "new_task_list". Just return "reply".
-         - Keep the conversation going.
+         - If user is just chatting or asking for advice *without* changing the goal, **DO NOT** return "new_task_list". 
+         - Just return "reply". Keep the current plan active.
 
       [OUTPUT FORMAT]: JSON ONLY.
       {
-        "reply": "Conversational response (usually the first instruction or empathy)",
+        "reply": "Conversational response",
         "new_task_list": ["step1", "step2"...] (Optional: Only if planning/re-planning),
         "timer_seconds": 180,
         "detected_goal": "Goal String"
@@ -238,15 +248,16 @@ app.post('/api/chat', async (c) => {
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     const result = JSON.parse(extractJson(rawText));
 
-    // ★ リスト更新ロジック (ここが重要)
+    // ★ リスト更新ロジック (賢く結合)
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
-      let finalTaskList = [];
+      let finalTaskList: string[] = [];
       
       if (action === 'retry') {
-        // Retryの場合: [新しいマイクロタスク] + [残っていた未来のタスク] を結合
+        // Retryの場合: [分解されたタスク] + [残っていた未来のタスク] を結合して保存
+        // これにより、未来の予定を消さずに済みます
         finalTaskList = [...result.new_task_list, ...remainingTasks];
       } else {
-        // Normal (新規ゴール)の場合: 新しいリストで上書き
+        // 新規ゴールの場合: 新しいリストで上書き
         finalTaskList = result.new_task_list;
       }
 
@@ -270,7 +281,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// 他のルートはそのまま
+// --- 他のルート (変更なし) ---
 app.post('/api/feedback', async (c) => { /*...省略...*/ return c.json({streak:0}); });
 app.post('/api/share-recovery', async (c) => { /*...省略...*/ return c.json({success:true}); });
 
