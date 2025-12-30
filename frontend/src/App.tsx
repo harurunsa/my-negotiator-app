@@ -4,7 +4,6 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
-// --- 翻訳辞書 ---
 const TRANSLATIONS = {
   ja: {
     logo: "Negotiator",
@@ -54,7 +53,6 @@ function App() {
   const [currentGoal, setCurrentGoal] = useState<string>("");
   const [showLimitModal, setShowLimitModal] = useState(false);
   
-  // ★言語設定
   const [lang, setLang] = useState<'ja' | 'en'>(
     navigator.language.startsWith('en') ? 'en' : 'ja'
   );
@@ -105,6 +103,7 @@ function App() {
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
+  // ★修正: planを受け取るように変更
   const handleUpgrade = async (plan: 'yearly' | 'monthly') => {
     if (!user) return;
     try {
@@ -112,11 +111,11 @@ function App() {
       const res = await fetch(`${API_URL}/api/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email, plan }) // ★ここ重要: planを送る
+        body: JSON.stringify({ email: user.email, plan }) // planを送信
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
-      else console.error("No URL returned", data); // エラー確認用
+      else console.error("No URL returned from backend", data);
     } catch (e) { 
       console.error(e);
       setLoading(false);
@@ -164,9 +163,7 @@ function App() {
 
   const sendMessage = async (manualMessage: string | null, action: 'normal' | 'retry' | 'next' = 'normal') => {
     if (action === 'normal' && !manualMessage?.trim()) return;
-    
     if (navigator.vibrate) navigator.vibrate(10);
-
     let newLog = [...chatLog];
     if (action === 'normal' && manualMessage) {
       newLog.push({ role: "user", text: manualMessage });
@@ -175,11 +172,9 @@ function App() {
     } else if (action === 'next') {
       newLog.push({ role: "system", text: t.system_next });
     }
-    
     setChatLog(newLog);
     if(manualMessage) setInput("");
     setLoading(true);
-
     const lastAiMsg = chatLog.length > 0 ? chatLog[chatLog.length - 1].text : "";
 
     try {
@@ -202,9 +197,7 @@ function App() {
         setLoading(false);
         return;
       }
-
       if (data.detected_goal) setCurrentGoal(data.detected_goal);
-
       setChatLog(prev => [...prev, { 
         role: "ai", 
         text: data.reply, 
@@ -222,11 +215,9 @@ function App() {
   const handleFeedback = async (index: number, used_archetype: string, is_success: boolean, suggestedTimer: number) => {
     if (!user) return;
     if (navigator.vibrate) navigator.vibrate(20);
-
     const updatedLog = [...chatLog];
     updatedLog[index].feedback_done = true;
     setChatLog(updatedLog);
-
     fetch(`${API_URL}/api/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -234,7 +225,6 @@ function App() {
     }).then(res => res.json()).then(data => {
       if (data.streak !== undefined) setUser({ ...user, streak: data.streak });
     });
-
     if (is_success) {
       triggerConfetti();
       const t_sec = suggestedTimer || 180;
@@ -291,7 +281,6 @@ function App() {
   return (
     <div style={styles.appContainer}>
       
-      {/* 課金・制限モーダル */}
       {showLimitModal && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
@@ -313,15 +302,18 @@ function App() {
               
               <div style={{width: '100%', height: '1px', background: '#eee', margin: '5px 0'}}></div>
 
-              {/* 年額プラン */}
+              {/* ★修正: onClickでplanを渡す */}
               <button onClick={() => handleUpgrade('yearly')} style={styles.modalBtnPro}>
                 <div style={{fontSize: '0.8rem', opacity: 0.9, marginBottom: '2px'}}>✨ 2 Months Free</div>
                 👑 Upgrade to Pro (Yearly)
               </button>
 
-              {/* 月額プラン */}
               <button onClick={() => handleUpgrade('monthly')} style={styles.modalBtnMonthly}>
                 or Monthly Plan
+              </button>
+              
+              <button onClick={() => setShowLimitModal(false)} style={styles.modalBtnClose}>
+                Close
               </button>
             </div>
           </div>
@@ -601,7 +593,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     animation: 'float 15s infinite ease-in-out reverse'
   },
   
-  // ★重要修正: スクロール制御のため minHeight: 0 を追加
+  // 重要: スクロール制御のため minHeight: 0 を追加
   chatContainer: { 
     flex: 1, 
     display: 'flex', 
@@ -610,7 +602,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     minHeight: 0, 
     position: 'relative'
   }, 
-  // ★重要修正: overflowY: auto でスクロール領域を定義
+  // 重要: overflowY: auto でスクロール領域を定義
   chatScrollArea: { 
     flex: 1, 
     overflowY: 'auto', 
@@ -644,7 +636,6 @@ const styles: { [key: string]: React.CSSProperties } = {
   modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center' },
   modalContent: { background: 'white', padding: '30px', borderRadius: '24px', maxWidth: '340px', width: '90%', textAlign: 'center', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' },
   modalBtnShare: { background: '#1DA1F2', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', width: '100%', fontSize: '1rem' },
-  
   modalBtnPro: { 
     background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', 
     color: '#333', 
@@ -660,7 +651,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     position: 'relative',
     overflow: 'hidden'
   },
-  
   modalBtnMonthly: {
     background: 'transparent',
     color: '#888',
@@ -673,7 +663,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '0.9rem',
     marginTop: '5px'
   },
-  
   modalBtnClose: { background: 'transparent', border: 'none', color: '#999', padding: '10px', cursor: 'pointer', fontSize: '0.9rem', marginTop: '10px' }
 };
 
