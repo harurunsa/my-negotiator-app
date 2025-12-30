@@ -6,11 +6,14 @@ type Bindings = {
   GOOGLE_CLIENT_SECRET: string
   DB: D1Database
   GEMINI_API_KEY: string
+  
+  // Lemon Squeezy Variables
   LEMON_SQUEEZY_API_KEY: string
   LEMON_SQUEEZY_STORE_ID: string
   LEMON_SQUEEZY_VARIANT_ID_YEARLY: string
   LEMON_SQUEEZY_VARIANT_ID_MONTHLY: string
   LEMON_SQUEEZY_WEBHOOK_SECRET: string
+  
   FRONTEND_URL: string
 }
 
@@ -19,7 +22,7 @@ app.use('/*', cors())
 
 const DAILY_LIMIT = 5;
 
-// プロンプト定義
+// --- プロンプト定義 ---
 const ARCHETYPES = {
   empathy: {
     label: "The Empathic Counselor",
@@ -52,9 +55,10 @@ function extractJson(text: string): string {
   return text.substring(start, end + 1);
 }
 
-// Lemon Squeezy API Helper
+// --- Lemon Squeezy API Helper (Improved Debugging) ---
 async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
-  console.log(`Calling Lemon Squeezy: ${path}`); // ログ追加
+  console.log(`[LemonSqueezy] Request: ${method} /${path}`);
+  
   const res = await fetch(`https://api.lemonsqueezy.com/v1/${path}`, {
     method,
     headers: {
@@ -64,18 +68,28 @@ async function callLemonSqueezy(path: string, method: string, apiKey: string, bo
     },
     body: body ? JSON.stringify(body) : undefined
   });
-  const data: any = await res.json();
-  
-  // エラー詳細をログに出力
-  if (!res.ok || data.errors) {
-    console.error("Lemon Squeezy API Error:", JSON.stringify(data, null, 2));
-    const msg = data.errors ? data.errors.map((e: any) => e.detail || e.title).join(', ') : "Unknown Error";
-    throw new Error(`Lemon Squeezy Error: ${msg}`);
+
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    console.error("[LemonSqueezy] Non-JSON Response:", text);
+    throw new Error(`Lemon Squeezy API returned non-JSON: ${text.substring(0, 100)}`);
   }
+  
+  if (!res.ok || data.errors) {
+    console.error("[LemonSqueezy] API Error:", JSON.stringify(data, null, 2));
+    const errorDetail = data.errors 
+      ? data.errors.map((e: any) => `${e.title}: ${e.detail}`).join(', ') 
+      : "Unknown API Error";
+    throw new Error(`Lemon Squeezy Failed: ${errorDetail}`);
+  }
+  
   return data;
 }
 
-// 認証
+// --- Auth Routes ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -116,7 +130,7 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// AIチャット
+// --- AI Chat ---
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
@@ -254,7 +268,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// その他API
+// --- Misc Routes ---
 app.post('/api/feedback', async (c) => {
   const { email, used_archetype, is_success } = await c.req.json();
   try {
@@ -276,18 +290,25 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
-// Checkout Endpoint (Improved Error Handling)
+// --- ★ CHECKOUT (Improved) ---
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
     
-    // Variant IDの選択 (環境変数が正しく取れているか注意)
-    const variantId = plan === 'monthly' 
+    // 1. 環境変数のチェック (ログには値を出さない)
+    if (!c.env.LEMON_SQUEEZY_STORE_ID) throw new Error("Server Error: Missing Store ID in Env");
+    if (!c.env.LEMON_SQUEEZY_API_KEY) throw new Error("Server Error: Missing API Key in Env");
+
+    // 2. Variant IDの選択とチェック
+    let variantId = plan === 'monthly' 
       ? c.env.LEMON_SQUEEZY_VARIANT_ID_MONTHLY 
       : c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
 
+    // デフォルトはYearlyへ倒すなど安全策
+    if (!variantId && !plan) variantId = c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
+
     if (!variantId) {
-      throw new Error(`Variant ID for plan '${plan}' is missing in environment variables.`);
+      throw new Error(`Server Error: Missing Variant ID for plan '${plan}'. Check Cloudflare Env Vars.`);
     }
 
     const payload = {
@@ -303,8 +324,8 @@ app.post('/api/checkout', async (c) => {
           }
         },
         relationships: {
-          store: { data: { type: "stores", id: c.env.LEMON_SQUEEZY_STORE_ID } },
-          variant: { data: { type: "variants", id: variantId } }
+          store: { data: { type: "stores", id: c.env.LEMON_SQUEEZY_STORE_ID.toString() } }, // toString()で型安全に
+          variant: { data: { type: "variants", id: variantId.toString() } }
         }
       }
     };
@@ -314,11 +335,13 @@ app.post('/api/checkout', async (c) => {
     if (data?.data?.attributes?.url) {
       return c.json({ url: data.data.attributes.url });
     } else {
-      throw new Error("API call succeeded but no URL returned.");
+      console.error("LemonSqueezy Response Invalid:", data);
+      throw new Error("API succeeded but returned no checkout URL.");
     }
   } catch(e: any) {
-    console.error("Checkout Failed:", e.message);
-    return c.json({ error: e.message }, 500);
+    console.error("Checkout Fatal Error:", e.message);
+    // 詳細なエラーをフロントエンドへ返す
+    return c.json({ error: e.message, details: "Check backend logs for more info." }, 500);
   }
 });
 
