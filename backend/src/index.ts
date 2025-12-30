@@ -6,14 +6,11 @@ type Bindings = {
   GOOGLE_CLIENT_SECRET: string
   DB: D1Database
   GEMINI_API_KEY: string
-  
-  // Lemon Squeezy用 (Cloudflare環境変数から読み込む)
   LEMON_SQUEEZY_API_KEY: string
   LEMON_SQUEEZY_STORE_ID: string
   LEMON_SQUEEZY_VARIANT_ID_YEARLY: string
   LEMON_SQUEEZY_VARIANT_ID_MONTHLY: string
   LEMON_SQUEEZY_WEBHOOK_SECRET: string
-  
   FRONTEND_URL: string
 }
 
@@ -22,7 +19,7 @@ app.use('/*', cors())
 
 const DAILY_LIMIT = 5;
 
-// プロンプト定義: 「短さ」を徹底させる制約(CONSTRAINT)を追加済み
+// プロンプト定義
 const ARCHETYPES = {
   empathy: {
     label: "The Empathic Counselor",
@@ -55,8 +52,9 @@ function extractJson(text: string): string {
   return text.substring(start, end + 1);
 }
 
-// --- Lemon Squeezy API Helper ---
+// Lemon Squeezy API Helper
 async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
+  console.log(`Calling Lemon Squeezy: ${path}`); // ログ追加
   const res = await fetch(`https://api.lemonsqueezy.com/v1/${path}`, {
     method,
     headers: {
@@ -66,10 +64,18 @@ async function callLemonSqueezy(path: string, method: string, apiKey: string, bo
     },
     body: body ? JSON.stringify(body) : undefined
   });
-  return await res.json();
+  const data: any = await res.json();
+  
+  // エラー詳細をログに出力
+  if (!res.ok || data.errors) {
+    console.error("Lemon Squeezy API Error:", JSON.stringify(data, null, 2));
+    const msg = data.errors ? data.errors.map((e: any) => e.detail || e.title).join(', ') : "Unknown Error";
+    throw new Error(`Lemon Squeezy Error: ${msg}`);
+  }
+  return data;
 }
 
-// --- 認証周り ---
+// 認証
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -110,7 +116,7 @@ app.get('/auth/callback', async (c) => {
   }
 })
 
-// --- AIチャット ---
+// AIチャット
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'ja' } = await c.req.json()
@@ -138,7 +144,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // バンディットアルゴリズム (最適化ロジック)
+    // Bandit Logic
     const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
     const epsilon = 0.2;
     let selectedKey: ArchetypeKey = 'empathy';
@@ -164,11 +170,8 @@ app.post('/api/chat', async (c) => {
 
     const archetype = ARCHETYPES[selectedKey];
     const userMemory = user.memory || "";
-
-    // 高速モデルを使用
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
-    // システムプロンプト: 短さと会話を強制
     const systemInstruction = `
       You are an Executive Function Augmentation AI for ADHD.
       
@@ -179,9 +182,9 @@ app.post('/api/chat', async (c) => {
       [Language]: Reply in ${lang === 'en' ? 'English' : 'Japanese'}.
       
       [CRITICAL RULES]:
-      1. **KEEP IT SHORT**. Maximum 2-3 sentences. Do not write a wall of text.
-      2. **ONE STEP ONLY**. Do not give a list. Do not plan the whole project. Give only the *very first, smallest* physical step.
-      3. **CONVERSATIONAL**. Talk *to* the user, not *at* them. Ask a simple question or give a simple command.
+      1. **KEEP IT SHORT**. Maximum 2-3 sentences.
+      2. **ONE STEP ONLY**. Give only the *very first, smallest* physical step.
+      3. **CONVERSATIONAL**. Talk *to* the user.
       
       ${current_goal ? `[GOAL]: ${current_goal}` : "Infer goal."}
       
@@ -221,7 +224,7 @@ app.post('/api/chat', async (c) => {
 
     if (!result) {
       result = {
-        reply: "通信エラーです。もう一度深呼吸して、リラックスしましょう。",
+        reply: "通信エラーです。深呼吸してリラックスしましょう。",
         timer_seconds: 60,
         detected_goal: current_goal,
         used_archetype: selectedKey
@@ -251,7 +254,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// --- その他API ---
+// その他API
 app.post('/api/feedback', async (c) => {
   const { email, used_archetype, is_success } = await c.req.json();
   try {
@@ -273,27 +276,30 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e) { return c.json({ error: "DB Error"}, 500); }
 });
 
-// --- Lemon Squeezy Checkout ---
+// Checkout Endpoint (Improved Error Handling)
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
     
-    // プランに応じたVariant IDを選択
+    // Variant IDの選択 (環境変数が正しく取れているか注意)
     const variantId = plan === 'monthly' 
       ? c.env.LEMON_SQUEEZY_VARIANT_ID_MONTHLY 
       : c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
 
-    // APIリクエストボディ (JSON:API仕様)
+    if (!variantId) {
+      throw new Error(`Variant ID for plan '${plan}' is missing in environment variables.`);
+    }
+
     const payload = {
       data: {
         type: "checkouts",
         attributes: {
           checkout_data: {
             email,
-            custom: { user_email: email } // Webhookでユーザー特定するために埋め込む
+            custom: { user_email: email }
           },
           checkout_options: {
-            redirect_url: `${c.env.FRONTEND_URL}/?payment=success`, // 決済成功時の戻り先
+            redirect_url: `${c.env.FRONTEND_URL}/?payment=success`,
           }
         },
         relationships: {
@@ -308,46 +314,36 @@ app.post('/api/checkout', async (c) => {
     if (data?.data?.attributes?.url) {
       return c.json({ url: data.data.attributes.url });
     } else {
-      throw new Error("Failed to create checkout");
+      throw new Error("API call succeeded but no URL returned.");
     }
   } catch(e: any) {
+    console.error("Checkout Failed:", e.message);
     return c.json({ error: e.message }, 500);
   }
 });
 
-// --- Lemon Squeezy Portal ---
 app.post('/api/portal', async (c) => {
   try {
     const { email } = await c.req.json();
-    
-    // DBからCustomer IDを取得 (Stripeのカラムを流用)
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     
     if (!user || !user.stripe_customer_id) {
       return c.json({ error: "No billing information found" }, 404);
     }
-
-    // Customer APIからポータルURLを取得
     const data: any = await callLemonSqueezy(`customers/${user.stripe_customer_id}`, 'GET', c.env.LEMON_SQUEEZY_API_KEY);
-    
     const portalUrl = data?.data?.attributes?.urls?.customer_portal;
-    if (portalUrl) {
-      return c.json({ url: portalUrl });
-    } else {
-      throw new Error("Portal URL not found");
-    }
+    if (portalUrl) return c.json({ url: portalUrl });
+    else throw new Error("Portal URL not found");
   } catch (e: any) {
     return c.json({ error: e.message }, 500);
   }
 });
 
-// --- Lemon Squeezy Webhook ---
 app.post('/api/webhook', async (c) => {
   const secret = c.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
   const signature = c.req.header('x-signature');
   const bodyText = await c.req.text();
 
-  // 1. 署名検証 (HMAC SHA256)
   if (!signature) return c.text('No signature', 400);
   
   const encoder = new TextEncoder();
@@ -360,43 +356,26 @@ app.post('/api/webhook', async (c) => {
 
   if (hexSignature !== signature) return c.text('Invalid signature', 400);
 
-  // 2. イベント処理
   const body = JSON.parse(bodyText);
   const eventName = body.meta.event_name;
-  const customData = body.meta.custom_data || {}; // Checkout時に埋め込んだデータ
+  const customData = body.meta.custom_data || {};
   const attributes = body.data.attributes;
 
   try {
-    // サブスク作成・更新時
     if (eventName === 'subscription_created' || eventName === 'subscription_updated') {
       const email = attributes.user_email || customData.user_email;
-      const customerId = attributes.customer_id; // Lemon SqueezyのCustomer ID
-      const status = attributes.status; // 'active', 'on_trial', etc.
-
-      // statusが有効ならPro化
+      const customerId = attributes.customer_id; 
+      const status = attributes.status;
       const isPro = (status === 'active' || status === 'on_trial') ? 1 : 0;
-
       if (email) {
-        await c.env.DB.prepare(
-          "UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?"
-        ).bind(isPro, customerId, email).run();
+        await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?").bind(isPro, customerId, email).run();
       }
     }
-
-    // サブスク解約・期限切れ時
     if (eventName === 'subscription_cancelled' || eventName === 'subscription_expired') {
        const email = attributes.user_email || customData.user_email;
-       if (email) {
-         await c.env.DB.prepare(
-           "UPDATE users SET is_pro = 0 WHERE email = ?"
-         ).bind(email).run();
-       }
+       if (email) await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE email = ?").bind(email).run();
     }
-  } catch (e) {
-    console.error(e);
-    return c.text('DB Update Failed', 500);
-  }
-
+  } catch (e) { return c.text('DB Update Failed', 500); }
   return c.text('Received', 200);
 });
 
