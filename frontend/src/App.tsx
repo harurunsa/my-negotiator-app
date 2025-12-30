@@ -44,9 +44,10 @@ const TRANSLATIONS = {
     contact_send: "送信する",
     contact_success: "送信しました！ご意見ありがとうございます。",
     contact_error: "送信に失敗しました。",
-    install_app: "アプリをインストール",
-    install_desc: "ホーム画面に追加して、より快適に！",
+    install_app: "アプリ版をインストール",
+    install_desc: "ホーム画面に追加して、全画面で快適に利用しましょう！",
     install_btn: "追加する",
+    install_ios_guide: "画面下の「共有」ボタン 📤 をタップし、「ホーム画面に追加 ➕」を選択してください。",
     install_close: "閉じる"
   },
   en: {
@@ -89,8 +90,9 @@ const TRANSLATIONS = {
     contact_success: "Sent! Thank you for your feedback.",
     contact_error: "Failed to send.",
     install_app: "Install App",
-    install_desc: "Add to home screen for better experience!",
+    install_desc: "Add to home screen for the best experience!",
     install_btn: "Install",
+    install_ios_guide: "Tap the Share button 📤 below and select 'Add to Home Screen ➕'.",
     install_close: "Close"
   },
   pt: {
@@ -133,8 +135,9 @@ const TRANSLATIONS = {
     contact_success: "Enviado!",
     contact_error: "Erro.",
     install_app: "Instalar App",
-    install_desc: "Adicione à tela inicial!",
+    install_desc: "Adicione à tela inicial para melhor experiência!",
     install_btn: "Instalar",
+    install_ios_guide: "Toque em Compartilhar 📤 e selecione 'Adicionar à Tela de Início ➕'.",
     install_close: "Fechar"
   },
   es: {
@@ -177,8 +180,9 @@ const TRANSLATIONS = {
     contact_success: "¡Enviado!",
     contact_error: "Error.",
     install_app: "Instalar App",
-    install_desc: "¡Añadir a inicio!",
+    install_desc: "¡Añadir a inicio para mejor experiencia!",
     install_btn: "Instalar",
+    install_ios_guide: "Toca Compartir 📤 y selecciona 'Añadir a Inicio ➕'.",
     install_close: "Cerrar"
   },
   id: {
@@ -223,6 +227,7 @@ const TRANSLATIONS = {
     install_app: "Instal Aplikasi",
     install_desc: "Tambahkan ke layar utama!",
     install_btn: "Instal",
+    install_ios_guide: "Ketuk Bagikan 📤 dan pilih 'Tambah ke Utama ➕'.",
     install_close: "Tutup"
   }
 };
@@ -240,8 +245,10 @@ function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
   const [contactMsg, setContactMsg] = useState("");
   
+  // PWA State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
 
   const [lang, setLang] = useState<LangCode>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -275,27 +282,42 @@ function App() {
     }
   }, []);
 
-  // PWA Install Prompt Logic
+  // ★ PWA & iOS Detection Logic
   useEffect(() => {
+    // 1. Android/Desktop: 'beforeinstallprompt'
     const handler = (e: any) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      // インストール済みでなければバナーを表示
-      if (!window.matchMedia('(display-mode: standalone)').matches) {
-        setShowInstallBanner(true);
-      }
+      setShowInstallBanner(true);
     };
     window.addEventListener('beforeinstallprompt', handler);
+
+    // 2. iOS Detection
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+    
+    if (isIosDevice && !isStandalone) {
+      setIsIOS(true);
+      setShowInstallBanner(true); // Show banner for iOS too (instructional)
+    }
+
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
   const handleInstallClick = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setDeferredPrompt(null);
-      setShowInstallBanner(false);
+    if (deferredPrompt) {
+      // Android/Desktop: Trigger native prompt
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setDeferredPrompt(null);
+        setShowInstallBanner(false);
+      }
+    } else {
+      // iOS: Do nothing (Banner itself is the instruction) or maybe dismiss?
+      // ユーザーが「閉じる」を押すまで消さないのが一般的だが、
+      // ここではボタンを押したら閉じるようにする、あるいは何もしない
     }
   };
 
@@ -364,9 +386,12 @@ function App() {
         body: JSON.stringify({ email: user.email })
       });
       const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else alert("管理画面への移動に失敗しました。まだ課金履歴がない可能性があります。");
-      setLoading(false);
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert("管理画面への移動に失敗しました。まだ課金履歴がない可能性があります。");
+        setLoading(false);
+      }
     } catch (e) {
       console.error(e);
       alert("エラーが発生しました");
@@ -614,14 +639,17 @@ function App() {
 
   return (
     <div style={styles.appContainer}>
-      {/* PWA Install Banner */}
+      {/* ★ PWA Install Banner */}
       {showInstallBanner && (
         <div style={styles.installBanner} className="pop-in">
           <div style={{flex:1}}>
             <div style={{fontWeight:'bold', fontSize:'0.9rem'}}>{t.install_app}</div>
-            <div style={{fontSize:'0.75rem', opacity:0.8}}>{t.install_desc}</div>
+            <div style={{fontSize:'0.75rem', opacity:0.8}}>
+              {isIOS ? t.install_ios_guide : t.install_desc}
+            </div>
           </div>
-          <button onClick={handleInstallClick} style={styles.installBannerBtn}>{t.install_btn}</button>
+          {/* iOSの場合はボタンではなく閉じるのみ (指示を見るだけ) */}
+          {!isIOS && <button onClick={handleInstallClick} style={styles.installBannerBtn}>{t.install_btn}</button>}
           <button onClick={() => setShowInstallBanner(false)} style={styles.installBannerClose}>✕</button>
         </div>
       )}
@@ -784,7 +812,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: '700', cursor: 'pointer', width: '100%'
   },
   
-  // ★ PWA Install Banner Style
   installBanner: {
     position: 'fixed', bottom: '20px', left: '20px', right: '20px',
     background: '#1a1a1a', color: 'white', padding: '15px 20px', borderRadius: '16px',
@@ -856,14 +883,13 @@ const styles: { [key: string]: React.CSSProperties } = {
   actionBtnPrimary: { flex: 1, background: '#1a1a1a', color: '#fff', border: 'none', padding: '12px 0', borderRadius: '12px', fontWeight: '700', fontSize: '0.9rem', cursor: 'pointer', boxShadow: '0 4px 15px rgba(0,0,0,0.2)' },
   actionBtnSecondary: { flex: 0.4, background: '#F1F5F9', color: '#64748B', border: 'none', padding: '12px 0', borderRadius: '12px', fontWeight: '600', fontSize: '0.85rem', cursor: 'pointer' },
   
-  // Input Area (Mobile Safe Area)
   inputArea: { 
     padding: '15px', 
     background: '#fff', 
     display: 'flex', 
     gap: '12px', 
     alignItems: 'center', 
-    paddingBottom: 'max(15px, env(safe-area-inset-bottom))', // iPhone Notch Support
+    paddingBottom: 'max(15px, env(safe-area-inset-bottom))', 
     boxShadow: '0 -5px 20px rgba(0,0,0,0.03)' 
   },
   inputField: { flex: 1, padding: '16px 20px', borderRadius: '25px', border: 'none', fontSize: '1rem', outline: 'none', background: '#F1F5F9', color: '#1a1a1a' },
