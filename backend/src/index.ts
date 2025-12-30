@@ -35,7 +35,7 @@ const PPP_DISCOUNTS: { [key: string]: string } = {
   'NG': 'PPP50', // Nigeria
   'BD': 'PPP50', // Bangladesh
   'PK': 'PPP50', // Pakistan
-  
+  'JP': 'PPP50', // Pakistan
   // 30% OFF (中所得国)
   'CN': 'PPP30', // China
   'MX': 'PPP30', // Mexico
