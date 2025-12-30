@@ -103,7 +103,7 @@ function App() {
 
   const handleLogin = () => window.location.href = `${API_URL}/auth/login`;
 
-  // ★修正: planを受け取るように変更
+  // ★修正: planを受け取り、エラー詳細をコンソールに出す
   const handleUpgrade = async (plan: 'yearly' | 'monthly') => {
     if (!user) return;
     try {
@@ -111,13 +111,19 @@ function App() {
       const res = await fetch(`${API_URL}/api/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email, plan }) // planを送信
+        body: JSON.stringify({ email: user.email, plan })
       });
       const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else console.error("No URL returned from backend", data);
+      
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error("Checkout Error Details:", data); // ★ここで詳細ログを確認！
+        alert(`Checkout Failed: ${data.error || "Unknown Error"}`);
+      }
     } catch (e) { 
       console.error(e);
+      alert("通信エラーが発生しました");
       setLoading(false);
     }
   };
@@ -302,7 +308,6 @@ function App() {
               
               <div style={{width: '100%', height: '1px', background: '#eee', margin: '5px 0'}}></div>
 
-              {/* ★修正: onClickでplanを渡す */}
               <button onClick={() => handleUpgrade('yearly')} style={styles.modalBtnPro}>
                 <div style={{fontSize: '0.8rem', opacity: 0.9, marginBottom: '2px'}}>✨ 2 Months Free</div>
                 👑 Upgrade to Pro (Yearly)
