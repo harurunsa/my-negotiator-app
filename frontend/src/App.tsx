@@ -245,7 +245,6 @@ function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
   const [contactMsg, setContactMsg] = useState("");
   
-  // PWA State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
@@ -282,9 +281,7 @@ function App() {
     }
   }, []);
 
-  // ★ PWA & iOS Detection Logic
   useEffect(() => {
-    // 1. Android/Desktop: 'beforeinstallprompt'
     const handler = (e: any) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -292,14 +289,13 @@ function App() {
     };
     window.addEventListener('beforeinstallprompt', handler);
 
-    // 2. iOS Detection
     const userAgent = window.navigator.userAgent.toLowerCase();
     const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
     
     if (isIosDevice && !isStandalone) {
       setIsIOS(true);
-      setShowInstallBanner(true); // Show banner for iOS too (instructional)
+      setShowInstallBanner(true);
     }
 
     return () => window.removeEventListener('beforeinstallprompt', handler);
@@ -307,17 +303,12 @@ function App() {
 
   const handleInstallClick = async () => {
     if (deferredPrompt) {
-      // Android/Desktop: Trigger native prompt
       deferredPrompt.prompt();
       const { outcome } = await deferredPrompt.userChoice;
       if (outcome === 'accepted') {
         setDeferredPrompt(null);
         setShowInstallBanner(false);
       }
-    } else {
-      // iOS: Do nothing (Banner itself is the instruction) or maybe dismiss?
-      // ユーザーが「閉じる」を押すまで消さないのが一般的だが、
-      // ここではボタンを押したら閉じるようにする、あるいは何もしない
     }
   };
 
@@ -639,7 +630,7 @@ function App() {
 
   return (
     <div style={styles.appContainer}>
-      {/* ★ PWA Install Banner */}
+      {/* PWA Install Banner */}
       {showInstallBanner && (
         <div style={styles.installBanner} className="pop-in">
           <div style={{flex:1}}>
@@ -712,6 +703,13 @@ function App() {
                <button onClick={() => setCurrentView('settings')} style={{...styles.navBtn, opacity: currentView==='settings'?1:0.5}}>💳</button>
                <button onClick={() => setCurrentView('contact')} style={{...styles.navBtn, opacity: currentView==='contact'?1:0.5}}>✉️</button>
                
+               {/* ★追加: Upgradeボタン復活 (Pro未加入者のみ) */}
+               {!user.is_pro && (
+                 <button onClick={() => setShowLimitModal(true)} style={styles.upgradeHeaderBtn}>
+                   👑 Upgrade
+                 </button>
+               )}
+
                <div style={styles.streakBox}>
                  <span style={styles.streakLabel}>{t.streak_label}</span>
                  <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
@@ -763,7 +761,6 @@ function App() {
         .typing-dot:nth-child(2) { animation-delay: -0.16s; }
         @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
         
-        /* Mobile Optimization */
         @media (max-width: 600px) {
           body { font-size: 16px; }
           button { min-height: 44px; }
@@ -833,6 +830,14 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   backBtn: {
     background: 'transparent', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer'
+  },
+
+  // ★ 復活: Upgrade Button Style
+  upgradeHeaderBtn: {
+    padding: '6px 12px', fontSize: '0.8rem', borderRadius: '20px', border: 'none',
+    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333',
+    cursor: 'pointer', fontWeight: '800', boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
+    display: 'flex', alignItems: 'center', gap: '4px'
   },
 
   streakBox: { textAlign: 'right' },
