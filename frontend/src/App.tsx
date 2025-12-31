@@ -4,7 +4,6 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
-// ... (TRANSLATIONS定数などは変更なしのため省略せず記述します)
 const TRANSLATIONS = {
   ja: {
     logo: "Negotiator",
@@ -56,7 +55,9 @@ const TRANSLATIONS = {
     style_logic: "論理",
     style_game: "RPG風",
     style_passion: "熱血",
-    style_minimal: "短文"
+    style_minimal: "短文",
+    upload_btn: "画像解析",
+    analyzing: "解析中..."
   },
   en: {
     logo: "Negotiator",
@@ -108,7 +109,9 @@ const TRANSLATIONS = {
     style_logic: "Logic",
     style_game: "RPG",
     style_passion: "Passion",
-    style_minimal: "Short"
+    style_minimal: "Short",
+    upload_btn: "Analyze Img",
+    analyzing: "Analyzing..."
   },
   pt: {
     logo: "Negotiator",
@@ -160,7 +163,9 @@ const TRANSLATIONS = {
     style_logic: "Lógica",
     style_game: "RPG",
     style_passion: "Paixão",
-    style_minimal: "Curto"
+    style_minimal: "Curto",
+    upload_btn: "Analisar Img",
+    analyzing: "Analisando..."
   },
   es: {
     logo: "Negotiator",
@@ -212,7 +217,9 @@ const TRANSLATIONS = {
     style_logic: "Lógica",
     style_game: "RPG",
     style_passion: "Pasión",
-    style_minimal: "Corto"
+    style_minimal: "Corto",
+    upload_btn: "Analizar Img",
+    analyzing: "Analizando..."
   },
   id: {
     logo: "Negotiator",
@@ -264,13 +271,15 @@ const TRANSLATIONS = {
     style_logic: "Logika",
     style_game: "RPG",
     style_passion: "Semangat",
-    style_minimal: "Singkat"
+    style_minimal: "Singkat",
+    upload_btn: "Analisis Gbr",
+    analyzing: "Menganalisis..."
   }
 };
 
 type LangCode = 'ja' | 'en' | 'pt' | 'es' | 'id';
 type View = 'chat' | 'settings' | 'contact';
-type StyleCode = 'auto' | 'empathy' | 'logic' | 'game' | 'passion' | 'minimal';
+type StyleCode = 'auto' | 'empathy' | 'logic' | 'game' | 'passion' | 'minimal' | string;
 
 function App() {
   const [user, setUser] = useState<{email: string, name: string, streak: number, is_pro: number, usage_count?: number} | null>(null);
@@ -287,6 +296,11 @@ function App() {
   const [isIOS, setIsIOS] = useState(false);
 
   const [style, setStyle] = useState<StyleCode>('auto');
+  
+  // ★ カスタム人格用State
+  const [customPersonas, setCustomPersonas] = useState<any[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [lang, setLang] = useState<LangCode>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -450,6 +464,54 @@ function App() {
     finally { setLoading(false); }
   };
 
+  // ★ 画像圧縮・変換処理
+  const processImage = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxDim = 512; 
+          let w = img.width;
+          let h = img.height;
+          if (w > h) { if (w > maxDim) { h *= maxDim / w; w = maxDim; } }
+          else { if (h > maxDim) { w *= maxDim / h; h = maxDim; } }
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        };
+        img.src = e.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // ★ 画像アップロードハンドラ
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0] || !user) return;
+    setIsAnalyzing(true);
+    try {
+      const base64 = await processImage(e.target.files[0]);
+      const res = await fetch(`${API_URL}/api/analyze-persona`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email, imageBase64: base64, lang })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const newPersona = data.persona;
+        setCustomPersonas(prev => [...prev, newPersona]);
+        setStyle(newPersona.id);
+        alert(`「${newPersona.label}」の口調を習得しました！`);
+      } else {
+        alert("解析に失敗しました: " + (data.error || "Unknown error"));
+      }
+    } catch (err) { console.error(err); alert("通信エラー"); }
+    finally { setIsAnalyzing(false); }
+  };
+
   const handleShare = async () => {
     if (!user) return;
     const text = encodeURIComponent(`ADHDの脳内会議を代行してくれるAIアプリ「Negotiator」を使ってみた！\n#MyNegotiatorApp`);
@@ -500,7 +562,7 @@ function App() {
           prev_context: lastAiMsg,
           current_goal: currentGoal,
           lang,
-          style
+          style // ★ スタイルIDを送信
         }),
       });
       const data = await res.json();
@@ -587,6 +649,9 @@ function App() {
     if (ratio > 0.2) return "#FFEB3B";
     return "#FF0055";
   };
+
+  // ★ 現在のカスタム画像を取得
+  const currentCustomImage = customPersonas.find(p => p.id === style)?.image;
 
   const renderChat = () => (
     <div style={styles.chatContainer}>
@@ -725,7 +790,13 @@ function App() {
 
       <header style={styles.header}>
         <div style={{display:'flex', alignItems:'center', gap:'8px', minWidth: 0}}>
-          <div style={styles.logoIcon}>⚡</div>
+          {/* ★ ロゴ部分: カスタム画像があればそれを表示 */}
+          {currentCustomImage ? (
+            <img src={currentCustomImage} style={styles.customIcon} className="pop-in" alt="oshi" />
+          ) : (
+            <div style={styles.logoIcon}>⚡</div>
+          )}
+          
           <div style={{minWidth: 0, flex: 1}}>
             <h1 className="mobile-hidden" style={styles.logoText}>{t.logo}</h1>
             {currentGoal && currentView === 'chat' && <div className="fade-in" style={styles.goalText}>{t.goal_prefix} {currentGoal}</div>}
@@ -733,6 +804,14 @@ function App() {
         </div>
         
         <div className="header-right" style={{display:'flex', alignItems:'center', gap:'10px', flexShrink: 0}}>
+          
+          {/* ★ 画像アップロードボタン (隠しinput) */}
+          <input type="file" ref={fileInputRef} onChange={handleImageUpload} style={{display:'none'}} accept="image/*" />
+          <button onClick={() => fileInputRef.current?.click()} style={styles.uploadBtn} disabled={isAnalyzing}>
+            {isAnalyzing ? "⏳" : "📷"}
+          </button>
+
+          {/* ★ スタイル選択プルダウン (カスタム対応) */}
           <select value={style} onChange={(e) => setStyle(e.target.value as StyleCode)} className="mobile-compact" style={styles.langSelect}>
             <option value="auto">🤖 {t.style_auto}</option>
             <option value="empathy">🤗 {t.style_empathy}</option>
@@ -740,6 +819,9 @@ function App() {
             <option value="game">🎮 {t.style_game}</option>
             <option value="passion">🔥 {t.style_passion}</option>
             <option value="minimal">🗿 {t.style_minimal}</option>
+            {customPersonas.map(p => (
+              <option key={p.id} value={p.id}>✨ {p.label}</option>
+            ))}
           </select>
 
           <select value={lang} onChange={handleLangChange} className="mobile-compact" style={styles.langSelect}>
@@ -813,7 +895,6 @@ function App() {
         .typing-dot:nth-child(2) { animation-delay: -0.16s; }
         @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
         
-        /* 1050px以下でコンパクトモードにする */
         @media (max-width: 1050px) {
           body { font-size: 16px; }
           button { min-height: 44px; }
@@ -843,6 +924,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     paddingTop: 'env(safe-area-inset-top)'
   },
   logoIcon: { fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' },
+  // ★ カスタムアイコン用スタイル
+  customIcon: {
+    width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover',
+    border: '2px solid #00C2FF', boxShadow: '0 2px 8px rgba(0,194,255,0.3)'
+  },
+  // ★ アップロードボタン用スタイル
+  uploadBtn: {
+    background: 'white', border: '1px solid #ddd', borderRadius: '50%',
+    width: '32px', height: '32px', cursor: 'pointer', fontSize: '1rem',
+    display: 'flex', alignItems: 'center', justifyContent: 'center'
+  },
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
   goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   
