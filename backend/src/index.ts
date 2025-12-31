@@ -14,6 +14,11 @@ type Bindings = {
   FRONTEND_URL: string
 }
 
+type PersonaAnalysisResult = {
+  label: string;
+  prompt: string;
+};
+
 const app = new Hono<{ Bindings: Bindings }>()
 
 // CORS制限
@@ -45,7 +50,7 @@ const COUNTRY_TO_LANG: { [key: string]: string } = {
 };
 
 // 人格（アーキタイプ）定義
-const ARCHETYPES = {
+const ARCHETYPES: any = {
   empathy: {
     label: "The Empathic Counselor",
     prompt: "Tone: Warm, soft, soothing. Focus on emotional support. 'It's okay, let's take a small step.'"
@@ -177,10 +182,77 @@ app.post('/api/inquiry', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// --- ★ AI Chat (口調指定対応版) ---
+// ★ 画像解析API (推しの口調を生成)
+app.post('/api/analyze-persona', async (c) => {
+  try {
+    const { email, imageBase64, lang = 'ja' } = await c.req.json();
+    const apiKey = c.env.GEMINI_API_KEY;
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
+
+    const systemInstruction = `
+      Analyze the image of the character provided.
+      1. Infer the character's name (or give a descriptive nickname).
+      2. Analyze their visual appearance to determine their likely personality and speech style (tone).
+      3. Create a detailed system instruction to roleplay as this character.
+      
+      [Language]: Output in ${lang === 'ja' ? 'Japanese' : 'English'}.
+      
+      [OUTPUT JSON format]:
+      {
+        "label": "Character Name",
+        "prompt": "Tone: [Description]. Speech style: [Examples]. Acting instruction..."
+      }
+    `;
+
+    // チャットと同じモデルを使用
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: "user",
+          parts: [
+            { text: systemInstruction },
+            { inline_data: { mime_type: "image/jpeg", data: cleanBase64 } }
+          ]
+        }],
+        generationConfig: { response_mime_type: "application/json" }
+      })
+    });
+
+    const data: any = await response.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const analysis: PersonaAnalysisResult = JSON.parse(extractJson(rawText));
+
+    // DB保存
+    const user: any = await c.env.DB.prepare("SELECT custom_personas FROM users WHERE email = ?").bind(email).first();
+    let currentPersonas = user?.custom_personas ? JSON.parse(user.custom_personas) : [];
+    
+    const newPersona = {
+      id: `custom_${Date.now()}`,
+      label: analysis.label,
+      prompt: analysis.prompt,
+      image: imageBase64
+    };
+    
+    currentPersonas.push(newPersona);
+    if (currentPersonas.length > 3) currentPersonas.shift();
+
+    await c.env.DB.prepare("UPDATE users SET custom_personas = ? WHERE email = ?").bind(JSON.stringify(currentPersonas), email).run();
+
+    return c.json({ success: true, persona: newPersona });
+
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// ★ AI Chat (口調指定 & カスタム対応版)
 app.post('/api/chat', async (c) => {
   try {
-    // style パラメータを受け取る (デフォルトは 'auto')
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     const t = MESSAGES[lang] || MESSAGES.en;
@@ -198,7 +270,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- 1. タスクリスト処理 ---
+    // タスクリスト処理
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
@@ -219,35 +291,48 @@ app.post('/api/chat', async (c) => {
       }
     }
 
-    // --- 2. 人格選択 (手動 vs 自動) ---
-    let selectedKey: ArchetypeKey = 'empathy';
+    // 人格決定ロジック
+    let archetypeLabel = "Empathic Counselor";
+    let archetypePrompt = ARCHETYPES['empathy'].prompt;
+    let selectedKey = style;
 
-    // ★指定があればそれを使う
-    if (style && style !== 'auto' && ARCHETYPES[style as ArchetypeKey]) {
-      selectedKey = style as ArchetypeKey;
+    if (style && style !== 'auto') {
+        if (ARCHETYPES[style]) {
+            // プリセットから
+            archetypeLabel = ARCHETYPES[style].label;
+            archetypePrompt = ARCHETYPES[style].prompt;
+        } else if (style.startsWith('custom_')) {
+            // カスタムから検索
+            const customs = user.custom_personas ? JSON.parse(user.custom_personas) : [];
+            const target = customs.find((p: any) => p.id === style);
+            if (target) {
+                archetypeLabel = target.label;
+                archetypePrompt = target.prompt;
+            }
+        }
     } else {
-      // 指定がなければ自動 (バンディット)
-      const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
-      const epsilon = 0.2; 
-      let bestKey: ArchetypeKey = 'empathy';
-      let bestRate = -1;
+        // 自動 (Bandit)
+        const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
+        const epsilon = 0.2; 
+        let bestKey: ArchetypeKey = 'empathy';
+        let bestRate = -1;
 
-      Object.keys(ARCHETYPES).forEach((key) => {
-        const k = key as ArchetypeKey;
-        const stat = styleStats[k] || { wins: 0, total: 0 };
-        const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
-        if (rate > bestRate) { bestRate = rate; bestKey = k; }
-      });
+        Object.keys(ARCHETYPES).forEach((key) => {
+            const k = key as ArchetypeKey;
+            const stat = styleStats[k] || { wins: 0, total: 0 };
+            const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
+            if (rate > bestRate) { bestRate = rate; bestKey = k; }
+        });
 
-      if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
-        const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
-        selectedKey = keys[Math.floor(Math.random() * keys.length)];
-      } else { selectedKey = bestKey; }
+        if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
+            const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
+            selectedKey = keys[Math.floor(Math.random() * keys.length)];
+        } else { selectedKey = bestKey; }
+        
+        archetypeLabel = ARCHETYPES[selectedKey].label;
+        archetypePrompt = ARCHETYPES[selectedKey].prompt;
     }
 
-    const archetype = ARCHETYPES[selectedKey];
-
-    // --- 3. プロンプト構築 ---
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
     const currentTaskText = currentTaskList[taskIndex] || "None";
@@ -266,11 +351,11 @@ app.post('/api/chat', async (c) => {
       ${planContext}
       [GOAL]: ${current_goal || "Infer from user input"}
       
-      [CURRENT PERSONA]: **${archetype.label}**
-      [PERSONA INSTRUCTION]: ${archetype.prompt}
+      [CURRENT PERSONA]: **${archetypeLabel}**
+      [PERSONA INSTRUCTION]: ${archetypePrompt}
       
       [CRITICAL RULE]: 
-      1. Reply MUST reflect the [PERSONA INSTRUCTION] (Tone/Style).
+      1. Reply MUST reflect the [PERSONA INSTRUCTION] (Tone/Style/Roleplay).
       2. Task items in "new_task_list" must be **SHORT ACTION PHRASES ONLY**. No conversational filler in the list.
       
       [INSTRUCTIONS]:
@@ -330,14 +415,14 @@ app.post('/api/chat', async (c) => {
   } catch (e: any) { return c.json({ reply: `System Error: ${e.message}`, timer_seconds: 0 }); }
 })
 
-// --- 4. フィードバック処理 (統計更新) ---
+// --- Feedback & Others ---
 app.post('/api/feedback', async (c) => {
   const { email, used_archetype, is_success } = await c.req.json();
   try {
     const user: any = await c.env.DB.prepare("SELECT style_stats, streak FROM users WHERE email = ?").bind(email).first();
     let stats = user.style_stats ? JSON.parse(user.style_stats) : {};
     
-    if (used_archetype && used_archetype !== 'system_optimized' && used_archetype !== 'system_complete') {
+    if (used_archetype && !used_archetype.startsWith('system_')) {
         if (!stats[used_archetype]) stats[used_archetype] = { wins: 0, total: 0 };
         stats[used_archetype].total += 1;
         if (is_success) stats[used_archetype].wins += 1;
