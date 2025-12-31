@@ -167,6 +167,23 @@ app.get('/auth/callback', async (c) => {
 
 // --- API Endpoints ---
 
+// ★追加: ユーザー情報の取得 (画像人格データの復元用)
+app.get('/api/user', async (c) => {
+  const email = c.req.query('email');
+  if (!email) return c.json({ error: "Email required" }, 400);
+  
+  const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
+  if (!user) return c.json({ error: "User not found" }, 404);
+  
+  try {
+    user.custom_personas = JSON.parse(user.custom_personas || '[]');
+  } catch(e) {
+    user.custom_personas = [];
+  }
+  
+  return c.json(user);
+});
+
 app.post('/api/language', async (c) => {
   const { email, language } = await c.req.json();
   await c.env.DB.prepare("UPDATE users SET language = ? WHERE email = ?").bind(language, email).run();
@@ -182,7 +199,7 @@ app.post('/api/inquiry', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// ★ 画像解析API (推しの口調を生成)
+// ★ 画像解析API
 app.post('/api/analyze-persona', async (c) => {
   try {
     const { email, imageBase64, lang = 'ja' } = await c.req.json();
@@ -205,7 +222,6 @@ app.post('/api/analyze-persona', async (c) => {
       }
     `;
 
-    // チャットと同じモデルを使用
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
     const response = await fetch(url, {
@@ -227,7 +243,6 @@ app.post('/api/analyze-persona', async (c) => {
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     const analysis: PersonaAnalysisResult = JSON.parse(extractJson(rawText));
 
-    // DB保存
     const user: any = await c.env.DB.prepare("SELECT custom_personas FROM users WHERE email = ?").bind(email).first();
     let currentPersonas = user?.custom_personas ? JSON.parse(user.custom_personas) : [];
     
@@ -250,7 +265,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// ★ AI Chat (口調指定 & カスタム対応版)
+// ★ AI Chat
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -270,7 +285,6 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // タスクリスト処理
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
@@ -291,18 +305,15 @@ app.post('/api/chat', async (c) => {
       }
     }
 
-    // 人格決定ロジック
     let archetypeLabel = "Empathic Counselor";
     let archetypePrompt = ARCHETYPES['empathy'].prompt;
     let selectedKey = style;
 
     if (style && style !== 'auto') {
         if (ARCHETYPES[style]) {
-            // プリセットから
             archetypeLabel = ARCHETYPES[style].label;
             archetypePrompt = ARCHETYPES[style].prompt;
         } else if (style.startsWith('custom_')) {
-            // カスタムから検索
             const customs = user.custom_personas ? JSON.parse(user.custom_personas) : [];
             const target = customs.find((p: any) => p.id === style);
             if (target) {
@@ -311,7 +322,6 @@ app.post('/api/chat', async (c) => {
             }
         }
     } else {
-        // 自動 (Bandit)
         const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
         const epsilon = 0.2; 
         let bestKey: ArchetypeKey = 'empathy';
