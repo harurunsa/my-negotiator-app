@@ -57,7 +57,13 @@ const TRANSLATIONS = {
     style_passion: "熱血",
     style_minimal: "短文",
     upload_btn: "画像解析",
-    analyzing: "解析中..."
+    analyzing: "解析中...",
+    
+    // Menu
+    menu_title: "Menu",
+    label_style: "AIの性格 (Style)",
+    label_lang: "言語 (Language)",
+    label_nav: "移動 (Navigation)"
   },
   en: {
     logo: "Negotiator",
@@ -111,7 +117,12 @@ const TRANSLATIONS = {
     style_passion: "Passion",
     style_minimal: "Short",
     upload_btn: "Analyze Img",
-    analyzing: "Analyzing..."
+    analyzing: "Analyzing...",
+    
+    menu_title: "Menu",
+    label_style: "AI Persona",
+    label_lang: "Language",
+    label_nav: "Navigation"
   },
   pt: {
     logo: "Negotiator",
@@ -165,7 +176,11 @@ const TRANSLATIONS = {
     style_passion: "Paixão",
     style_minimal: "Curto",
     upload_btn: "Analisar Img",
-    analyzing: "Analisando..."
+    analyzing: "Analisando...",
+    menu_title: "Menu",
+    label_style: "Persona",
+    label_lang: "Idioma",
+    label_nav: "Navegação"
   },
   es: {
     logo: "Negotiator",
@@ -219,7 +234,11 @@ const TRANSLATIONS = {
     style_passion: "Pasión",
     style_minimal: "Corto",
     upload_btn: "Analizar Img",
-    analyzing: "Analizando..."
+    analyzing: "Analizando...",
+    menu_title: "Menú",
+    label_style: "Persona",
+    label_lang: "Idioma",
+    label_nav: "Navegación"
   },
   id: {
     logo: "Negotiator",
@@ -273,7 +292,11 @@ const TRANSLATIONS = {
     style_passion: "Semangat",
     style_minimal: "Singkat",
     upload_btn: "Analisis Gbr",
-    analyzing: "Menganalisis..."
+    analyzing: "Menganalisis...",
+    menu_title: "Menu",
+    label_style: "Persona",
+    label_lang: "Bahasa",
+    label_nav: "Navigasi"
   }
 };
 
@@ -297,7 +320,9 @@ function App() {
 
   const [style, setStyle] = useState<StyleCode>('auto');
   
-  // ★ カスタム人格用State
+  // ★ Menu Control
+  const [showMenu, setShowMenu] = useState(false);
+  
   const [customPersonas, setCustomPersonas] = useState<any[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -464,7 +489,6 @@ function App() {
     finally { setLoading(false); }
   };
 
-  // ★ 画像圧縮・変換処理
   const processImage = (file: File): Promise<string> => {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -488,7 +512,6 @@ function App() {
     });
   };
 
-  // ★ 画像アップロードハンドラ
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0] || !user) return;
     setIsAnalyzing(true);
@@ -562,7 +585,7 @@ function App() {
           prev_context: lastAiMsg,
           current_goal: currentGoal,
           lang,
-          style // ★ スタイルIDを送信
+          style
         }),
       });
       const data = await res.json();
@@ -650,7 +673,6 @@ function App() {
     return "#FF0055";
   };
 
-  // ★ 現在のカスタム画像を取得
   const currentCustomImage = customPersonas.find(p => p.id === style)?.image;
 
   const renderChat = () => (
@@ -739,6 +761,13 @@ function App() {
     </div>
   );
 
+  // ★ メニューを開く処理
+  const toggleMenu = () => setShowMenu(!showMenu);
+  const handleMenuSelect = (view: View) => {
+    setCurrentView(view);
+    setShowMenu(false);
+  };
+
   return (
     <div style={styles.appContainer}>
       {showInstallBanner && (
@@ -790,7 +819,6 @@ function App() {
 
       <header style={styles.header}>
         <div style={{display:'flex', alignItems:'center', gap:'8px', minWidth: 0}}>
-          {/* ★ ロゴ部分: カスタム画像があればそれを表示 */}
           {currentCustomImage ? (
             <img src={currentCustomImage} style={styles.customIcon} className="pop-in" alt="oshi" />
           ) : (
@@ -803,54 +831,78 @@ function App() {
           </div>
         </div>
         
-        <div className="header-right" style={{display:'flex', alignItems:'center', gap:'10px', flexShrink: 0}}>
-          
-          {/* ★ 画像アップロードボタン (隠しinput) */}
-          <input type="file" ref={fileInputRef} onChange={handleImageUpload} style={{display:'none'}} accept="image/*" />
-          <button onClick={() => fileInputRef.current?.click()} style={styles.uploadBtn} disabled={isAnalyzing}>
-            {isAnalyzing ? "⏳" : "📷"}
-          </button>
-
-          {/* ★ スタイル選択プルダウン (カスタム対応) */}
-          <select value={style} onChange={(e) => setStyle(e.target.value as StyleCode)} className="mobile-compact" style={styles.langSelect}>
-            <option value="auto">🤖 {t.style_auto}</option>
-            <option value="empathy">🤗 {t.style_empathy}</option>
-            <option value="logic">🤖 {t.style_logic}</option>
-            <option value="game">🎮 {t.style_game}</option>
-            <option value="passion">🔥 {t.style_passion}</option>
-            <option value="minimal">🗿 {t.style_minimal}</option>
-            {customPersonas.map(p => (
-              <option key={p.id} value={p.id}>✨ {p.label}</option>
-            ))}
-          </select>
-
-          <select value={lang} onChange={handleLangChange} className="mobile-compact" style={styles.langSelect}>
-            <option value="ja">JP</option>
-            <option value="en">EN</option>
-            <option value="pt">PT</option>
-            <option value="es">ES</option>
-            <option value="id">ID</option>
-          </select>
-          
-          {user && (
-             <div className="header-right" style={{display:'flex', alignItems:'center', gap:'8px'}}>
-               <button onClick={() => setCurrentView('chat')} style={{...styles.navBtn, opacity: currentView==='chat'?1:0.5}}>💬</button>
-               <button onClick={() => setCurrentView('settings')} style={{...styles.navBtn, opacity: currentView==='settings'?1:0.5}}>💳</button>
-               <button onClick={() => setCurrentView('contact')} style={{...styles.navBtn, opacity: currentView==='contact'?1:0.5}}>✉️</button>
-               
-               {!user.is_pro && (
-                 <button onClick={() => setShowLimitModal(true)} style={styles.upgradeHeaderBtn}>
-                   👑 <span className="mobile-hidden">Upgrade</span>
-                 </button>
-               )}
-
-               <div style={styles.streakBox}>
+        {user && (
+          <div style={{display:'flex', alignItems:'center', gap:'15px', position:'relative'}}>
+             <div style={styles.streakBox}>
                  <span className="mobile-hidden" style={styles.streakLabel}>{t.streak_label}</span>
-                 <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
-               </div>
+                 <span className="pop-in" style={styles.streakValue}>{user.streak} <span style={{fontSize:'1rem'}}>🔥</span></span>
              </div>
-          )}
-        </div>
+             
+             {/* ★ メニューボタン */}
+             <button onClick={toggleMenu} style={styles.menuToggleBtn}>☰</button>
+
+             {/* ★ ドロップダウンメニュー */}
+             {showMenu && (
+               <div className="pop-in" style={styles.menuDropdown}>
+                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'15px', paddingBottom:'10px', borderBottom:'1px solid #eee'}}>
+                   <span style={{fontWeight:'bold', color:'#333'}}>{t.menu_title}</span>
+                   <button onClick={toggleMenu} style={{background:'none', border:'none', fontSize:'1.2rem', cursor:'pointer'}}>✕</button>
+                 </div>
+
+                 {/* Upgrade (Free Only) */}
+                 {!user.is_pro && (
+                   <button onClick={() => { setShowLimitModal(true); setShowMenu(false); }} style={styles.menuUpgradeBtn}>
+                     👑 Upgrade to Pro
+                   </button>
+                 )}
+
+                 {/* Navigation Links */}
+                 <div style={{display:'flex', flexDirection:'column', gap:'10px', marginBottom:'20px'}}>
+                   <div style={styles.menuLabel}>{t.label_nav}</div>
+                   <button onClick={() => handleMenuSelect('chat')} style={{...styles.menuItem, background: currentView==='chat' ? '#f0f9ff' : 'white'}}>💬 {t.menu_chat}</button>
+                   <button onClick={() => handleMenuSelect('settings')} style={{...styles.menuItem, background: currentView==='settings' ? '#f0f9ff' : 'white'}}>💳 {t.menu_sub}</button>
+                   <button onClick={() => handleMenuSelect('contact')} style={{...styles.menuItem, background: currentView==='contact' ? '#f0f9ff' : 'white'}}>✉️ {t.menu_contact}</button>
+                 </div>
+
+                 {/* Settings */}
+                 <div style={{display:'flex', flexDirection:'column', gap:'15px'}}>
+                   <div>
+                     <div style={styles.menuLabel}>{t.label_style}</div>
+                     <div style={{display:'flex', gap:'5px'}}>
+                       <select value={style} onChange={(e) => setStyle(e.target.value as StyleCode)} style={styles.menuSelect}>
+                         <option value="auto">🤖 {t.style_auto}</option>
+                         <option value="empathy">🤗 {t.style_empathy}</option>
+                         <option value="logic">🤖 {t.style_logic}</option>
+                         <option value="game">🎮 {t.style_game}</option>
+                         <option value="passion">🔥 {t.style_passion}</option>
+                         <option value="minimal">🗿 {t.style_minimal}</option>
+                         {customPersonas.map(p => (
+                           <option key={p.id} value={p.id}>✨ {p.label}</option>
+                         ))}
+                       </select>
+                       {/* 画像アップロードボタン */}
+                       <input type="file" ref={fileInputRef} onChange={handleImageUpload} style={{display:'none'}} accept="image/*" />
+                       <button onClick={() => fileInputRef.current?.click()} style={styles.menuUploadBtn} disabled={isAnalyzing}>
+                         {isAnalyzing ? "⏳" : "📷"}
+                       </button>
+                     </div>
+                   </div>
+
+                   <div>
+                     <div style={styles.menuLabel}>{t.label_lang}</div>
+                     <select value={lang} onChange={handleLangChange} style={styles.menuSelect}>
+                        <option value="ja">日本語</option>
+                        <option value="en">English</option>
+                        <option value="pt">Português</option>
+                        <option value="es">Español</option>
+                        <option value="id">Indonesia</option>
+                     </select>
+                   </div>
+                 </div>
+               </div>
+             )}
+          </div>
+        )}
       </header>
 
       {!user ? (
@@ -895,14 +947,11 @@ function App() {
         .typing-dot:nth-child(2) { animation-delay: -0.16s; }
         @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
         
-        @media (max-width: 1050px) {
+        @media (max-width: 800px) {
           body { font-size: 16px; }
           button { min-height: 44px; }
           input, textarea { font-size: 16px; }
-          
           .mobile-hidden { display: none !important; }
-          .header-right { gap: 5px !important; }
-          .mobile-compact { font-size: 10px !important; padding: 2px !important; width: auto !important; max-width: 80px; }
         }
       `}</style>
     </div>
@@ -924,12 +973,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     paddingTop: 'env(safe-area-inset-top)'
   },
   logoIcon: { fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' },
-  // ★ カスタムアイコン用スタイル
   customIcon: {
     width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover',
     border: '2px solid #00C2FF', boxShadow: '0 2px 8px rgba(0,194,255,0.3)'
   },
-  // ★ アップロードボタン用スタイル
   uploadBtn: {
     background: 'white', border: '1px solid #ddd', borderRadius: '50%',
     width: '32px', height: '32px', cursor: 'pointer', fontSize: '1rem',
@@ -938,15 +985,42 @@ const styles: { [key: string]: React.CSSProperties } = {
   logoText: { fontSize: '1.1rem', margin: 0, color: '#1a1a1a', fontWeight: '800', letterSpacing: '-0.5px' },
   goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   
-  langSelect: {
-    padding: '5px 8px', fontSize: '0.75rem', borderRadius: '15px', border: '1px solid #ddd',
-    background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555', outline: 'none',
-    maxWidth: '100px'
-  },
-  navBtn: {
-    background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', padding: '5px'
-  },
+  streakBox: { textAlign: 'right' },
+  streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
+  streakValue: { fontSize: '1.2rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
   
+  // ★ Menu Styles
+  menuToggleBtn: {
+    background: 'none', border: 'none', fontSize: '1.8rem', cursor: 'pointer', padding: '0 5px'
+  },
+  menuDropdown: {
+    position: 'absolute', top: '55px', right: '0', width: '260px',
+    background: 'white', borderRadius: '16px', boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+    padding: '20px', zIndex: 999, display: 'flex', flexDirection: 'column'
+  },
+  menuUpgradeBtn: {
+    width: '100%', padding: '12px', borderRadius: '12px', border: 'none',
+    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333',
+    fontWeight: '800', cursor: 'pointer', marginBottom: '15px',
+    boxShadow: '0 4px 12px rgba(253, 185, 49, 0.3)'
+  },
+  menuItem: {
+    padding: '12px', borderRadius: '12px', border: '1px solid #eee',
+    textAlign: 'left', fontSize: '1rem', fontWeight: '600', cursor: 'pointer',
+    transition: 'background 0.2s', display: 'flex', alignItems: 'center', gap: '8px'
+  },
+  menuLabel: {
+    fontSize: '0.7rem', color: '#999', fontWeight: '700', marginBottom: '5px', letterSpacing: '0.5px'
+  },
+  menuSelect: {
+    width: '100%', padding: '10px', borderRadius: '10px', border: '1px solid #ddd',
+    fontSize: '0.9rem', outline: 'none', background: '#fff'
+  },
+  menuUploadBtn: {
+    flexShrink: 0, width: '42px', borderRadius: '10px', border: '1px solid #ddd',
+    background: '#f9f9f9', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
+  },
+
   pageContainer: {
     flex: 1, paddingTop: '80px', padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowY: 'auto'
   },
@@ -985,17 +1059,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'transparent', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer'
   },
 
-  upgradeHeaderBtn: {
-    padding: '6px 12px', fontSize: '0.8rem', borderRadius: '20px', border: 'none',
-    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333',
-    cursor: 'pointer', fontWeight: '800', boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
-    display: 'flex', alignItems: 'center', gap: '4px'
-  },
-
-  streakBox: { textAlign: 'right' },
-  streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
-  streakValue: { fontSize: '1.4rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
-  
   landingContainer: { 
     flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center',
     background: '#0F172A', color: '#fff', position: 'relative', overflow: 'hidden'
