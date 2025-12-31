@@ -50,7 +50,6 @@ const TRANSLATIONS = {
     install_ios_guide: "画面下の「共有」ボタン 📤 をタップし、「ホーム画面に追加 ➕」を選択してください。",
     install_close: "閉じる",
     
-    // スマホ用に少し短縮
     style_auto: "自動 (Auto)",
     style_empathy: "共感",
     style_logic: "論理",
@@ -727,7 +726,8 @@ function App() {
         <div style={{display:'flex', alignItems:'center', gap:'8px', minWidth: 0}}>
           <div style={styles.logoIcon}>⚡</div>
           <div style={{minWidth: 0, flex: 1}}>
-            <h1 style={styles.logoText}>{t.logo}</h1>
+            {/* 画面幅850px以下で文字を隠すクラスを付与 */}
+            <h1 className="mobile-hidden" style={styles.logoText}>{t.logo}</h1>
             {currentGoal && currentView === 'chat' && <div className="fade-in" style={styles.goalText}>{t.goal_prefix} {currentGoal}</div>}
           </div>
         </div>
@@ -758,11 +758,13 @@ function App() {
                
                {!user.is_pro && (
                  <button onClick={() => setShowLimitModal(true)} style={styles.upgradeHeaderBtn}>
+                   {/* 画面幅850px以下で文字を隠す */}
                    👑 <span className="mobile-hidden">Upgrade</span>
                  </button>
                )}
 
                <div style={styles.streakBox}>
+                 {/* 画面幅850px以下でラベルを隠す */}
                  <span className="mobile-hidden" style={styles.streakLabel}>{t.streak_label}</span>
                  <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
                </div>
@@ -813,7 +815,8 @@ function App() {
         .typing-dot:nth-child(2) { animation-delay: -0.16s; }
         @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
         
-        @media (max-width: 600px) {
+        /* レスポンシブ対応 (850px以下でコンパクトモード) */
+        @media (max-width: 850px) {
           body { font-size: 16px; }
           button { min-height: 44px; }
           input, textarea { font-size: 16px; }
