@@ -48,7 +48,15 @@ const TRANSLATIONS = {
     install_desc: "ホーム画面に追加して、全画面で快適に利用しましょう！",
     install_btn: "追加する",
     install_ios_guide: "画面下の「共有」ボタン 📤 をタップし、「ホーム画面に追加 ➕」を選択してください。",
-    install_close: "閉じる"
+    install_close: "閉じる",
+    
+    // ★追加: 口調選択の翻訳
+    style_auto: "AIにお任せ (Auto)",
+    style_empathy: "共感カウンセラー",
+    style_logic: "論理的アナリスト",
+    style_game: "ゲームマスター (RPG)",
+    style_passion: "熱血コーチ",
+    style_minimal: "ミニマリスト (超短文)"
   },
   en: {
     logo: "Negotiator",
@@ -93,7 +101,14 @@ const TRANSLATIONS = {
     install_desc: "Add to home screen for the best experience!",
     install_btn: "Install",
     install_ios_guide: "Tap the Share button 📤 below and select 'Add to Home Screen ➕'.",
-    install_close: "Close"
+    install_close: "Close",
+    
+    style_auto: "Auto (AI Choice)",
+    style_empathy: "Empathic Counselor",
+    style_logic: "Logical Analyst",
+    style_game: "Game Master (RPG)",
+    style_passion: "Passionate Coach",
+    style_minimal: "Minimalist (Short)"
   },
   pt: {
     logo: "Negotiator",
@@ -138,7 +153,14 @@ const TRANSLATIONS = {
     install_desc: "Adicione à tela inicial para melhor experiência!",
     install_btn: "Instalar",
     install_ios_guide: "Toque em Compartilhar 📤 e selecione 'Adicionar à Tela de Início ➕'.",
-    install_close: "Fechar"
+    install_close: "Fechar",
+    
+    style_auto: "Automático",
+    style_empathy: "Conselheiro Empático",
+    style_logic: "Analista Lógico",
+    style_game: "Mestre de Jogo (RPG)",
+    style_passion: "Treinador Apaixonado",
+    style_minimal: "Minimalista (Curto)"
   },
   es: {
     logo: "Negotiator",
@@ -183,7 +205,14 @@ const TRANSLATIONS = {
     install_desc: "¡Añadir a inicio para mejor experiencia!",
     install_btn: "Instalar",
     install_ios_guide: "Toca Compartir 📤 y selecciona 'Añadir a Inicio ➕'.",
-    install_close: "Cerrar"
+    install_close: "Cerrar",
+    
+    style_auto: "Automático",
+    style_empathy: "Consejero Empático",
+    style_logic: "Analista Lógico",
+    style_game: "Maestro de Juego (RPG)",
+    style_passion: "Entrenador Apasionado",
+    style_minimal: "Minimalista (Corto)"
   },
   id: {
     logo: "Negotiator",
@@ -228,12 +257,20 @@ const TRANSLATIONS = {
     install_desc: "Tambahkan ke layar utama!",
     install_btn: "Instal",
     install_ios_guide: "Ketuk Bagikan 📤 dan pilih 'Tambah ke Utama ➕'.",
-    install_close: "Tutup"
+    install_close: "Tutup",
+    
+    style_auto: "Otomatis",
+    style_empathy: "Konselor Empati",
+    style_logic: "Analis Logis",
+    style_game: "Game Master (RPG)",
+    style_passion: "Pelatih Penuh Semangat",
+    style_minimal: "Minimalis (Singkat)"
   }
 };
 
 type LangCode = 'ja' | 'en' | 'pt' | 'es' | 'id';
 type View = 'chat' | 'settings' | 'contact';
+type StyleCode = 'auto' | 'empathy' | 'logic' | 'game' | 'passion' | 'minimal';
 
 function App() {
   const [user, setUser] = useState<{email: string, name: string, streak: number, is_pro: number, usage_count?: number} | null>(null);
@@ -248,6 +285,9 @@ function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
+
+  // ★追加: 口調選択用ステート
+  const [style, setStyle] = useState<StyleCode>('auto');
 
   const [lang, setLang] = useState<LangCode>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -460,7 +500,8 @@ function App() {
           action, 
           prev_context: lastAiMsg,
           current_goal: currentGoal,
-          lang 
+          lang,
+          style // ★追加: 選択されたスタイルを送信
         }),
       });
       const data = await res.json();
@@ -555,6 +596,12 @@ function App() {
           <div className="fade-in" style={styles.emptyState}>
             <div style={{fontSize: '3rem', marginBottom: '20px'}}>{t.empty_icon}</div>
             <p style={{whiteSpace:'pre-line'}}>{t.empty_text}</p>
+            {showInstallBanner && !isIOS && (
+              <button onClick={handleInstallClick} style={styles.installBtn}>
+                <span style={{fontSize:'1.2rem'}}>📲</span> {t.install_app}
+                <div style={{fontSize:'0.7rem', fontWeight:'normal'}}>{t.install_desc}</div>
+              </button>
+            )}
           </div>
         )}
         {chatLog.map((log, i) => (
@@ -630,7 +677,6 @@ function App() {
 
   return (
     <div style={styles.appContainer}>
-      {/* PWA Install Banner */}
       {showInstallBanner && (
         <div style={styles.installBanner} className="pop-in">
           <div style={{flex:1}}>
@@ -639,7 +685,6 @@ function App() {
               {isIOS ? t.install_ios_guide : t.install_desc}
             </div>
           </div>
-          {/* iOSの場合はボタンではなく閉じるのみ (指示を見るだけ) */}
           {!isIOS && <button onClick={handleInstallClick} style={styles.installBannerBtn}>{t.install_btn}</button>}
           <button onClick={() => setShowInstallBanner(false)} style={styles.installBannerClose}>✕</button>
         </div>
@@ -688,7 +733,17 @@ function App() {
           </div>
         </div>
         
-        <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
+        <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+          {/* ★追加: 口調選択プルダウン */}
+          <select value={style} onChange={(e) => setStyle(e.target.value as StyleCode)} style={styles.langSelect}>
+            <option value="auto">🤖 {t.style_auto}</option>
+            <option value="empathy">🤗 {t.style_empathy}</option>
+            <option value="logic">🤖 {t.style_logic}</option>
+            <option value="game">🎮 {t.style_game}</option>
+            <option value="passion">🔥 {t.style_passion}</option>
+            <option value="minimal">🗿 {t.style_minimal}</option>
+          </select>
+
           <select value={lang} onChange={handleLangChange} style={styles.langSelect}>
             <option value="ja">JP</option>
             <option value="en">EN</option>
@@ -698,12 +753,11 @@ function App() {
           </select>
           
           {user && (
-             <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+             <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
                <button onClick={() => setCurrentView('chat')} style={{...styles.navBtn, opacity: currentView==='chat'?1:0.5}}>💬</button>
                <button onClick={() => setCurrentView('settings')} style={{...styles.navBtn, opacity: currentView==='settings'?1:0.5}}>💳</button>
                <button onClick={() => setCurrentView('contact')} style={{...styles.navBtn, opacity: currentView==='contact'?1:0.5}}>✉️</button>
                
-               {/* ★追加: Upgradeボタン復活 (Pro未加入者のみ) */}
                {!user.is_pro && (
                  <button onClick={() => setShowLimitModal(true)} style={styles.upgradeHeaderBtn}>
                    👑 Upgrade
@@ -780,7 +834,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   header: {
     position: 'absolute', top: 0, left: 0, right: 0, height: '60px',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '10px 20px', zIndex: 10,
+    padding: '10px 15px', zIndex: 10,
     background: 'rgba(247, 249, 252, 0.9)', backdropFilter: 'blur(10px)',
     borderBottom: '1px solid rgba(0,0,0,0.03)',
     paddingTop: 'env(safe-area-inset-top)'
@@ -790,8 +844,9 @@ const styles: { [key: string]: React.CSSProperties } = {
   goalText: { fontSize: '0.75rem', color: '#00C2FF', fontWeight: '600', marginTop: '2px', maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   
   langSelect: {
-    padding: '5px 10px', fontSize: '0.8rem', borderRadius: '15px', border: '1px solid #ddd',
-    background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555', outline: 'none'
+    padding: '5px 8px', fontSize: '0.75rem', borderRadius: '15px', border: '1px solid #ddd',
+    background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: '#555', outline: 'none',
+    maxWidth: '100px'
   },
   navBtn: {
     background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', padding: '5px'
@@ -808,7 +863,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: '#1a1a1a', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '12px',
     fontWeight: '700', cursor: 'pointer', width: '100%'
   },
-  
+  installBtn: {
+    background: '#00C2FF', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '12px',
+    fontWeight: '700', cursor: 'pointer', margin: '20px auto', display: 'block', boxShadow: '0 4px 15px rgba(0,194,255,0.4)'
+  },
   installBanner: {
     position: 'fixed', bottom: '20px', left: '20px', right: '20px',
     background: '#1a1a1a', color: 'white', padding: '15px 20px', borderRadius: '16px',
@@ -832,7 +890,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'transparent', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer'
   },
 
-  // ★ 復活: Upgrade Button Style
   upgradeHeaderBtn: {
     padding: '6px 12px', fontSize: '0.8rem', borderRadius: '20px', border: 'none',
     background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333',
