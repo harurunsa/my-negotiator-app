@@ -4,6 +4,9 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
+// ★設定: フロント側でも上限を知っておく
+const MAX_CUSTOM_PERSONAS = 3;
+
 const TRANSLATIONS = {
   ja: {
     logo: "Negotiator",
@@ -62,7 +65,9 @@ const TRANSLATIONS = {
     menu_title: "Menu",
     label_style: "AIの性格 (Style)",
     label_lang: "言語 (Language)",
-    label_nav: "移動 (Navigation)"
+    label_nav: "移動 (Navigation)",
+    limit_alert: "登録できるのは3つまでです。不要なものを削除してください。",
+    delete_confirm: "本当に削除しますか？"
   },
   en: {
     logo: "Negotiator",
@@ -121,7 +126,9 @@ const TRANSLATIONS = {
     menu_title: "Menu",
     label_style: "AI Persona",
     label_lang: "Language",
-    label_nav: "Navigation"
+    label_nav: "Navigation",
+    limit_alert: "Max 3 personas. Please delete one.",
+    delete_confirm: "Are you sure?"
   },
   pt: {
     logo: "Negotiator",
@@ -179,7 +186,9 @@ const TRANSLATIONS = {
     menu_title: "Menu",
     label_style: "Persona",
     label_lang: "Idioma",
-    label_nav: "Navegação"
+    label_nav: "Navegação",
+    limit_alert: "Max 3 personas.",
+    delete_confirm: "Tem certeza?"
   },
   es: {
     logo: "Negotiator",
@@ -237,7 +246,9 @@ const TRANSLATIONS = {
     menu_title: "Menú",
     label_style: "Persona",
     label_lang: "Idioma",
-    label_nav: "Navegación"
+    label_nav: "Navegación",
+    limit_alert: "Max 3 personas.",
+    delete_confirm: "¿Estás seguro?"
   },
   id: {
     logo: "Negotiator",
@@ -295,7 +306,9 @@ const TRANSLATIONS = {
     menu_title: "Menu",
     label_style: "Persona",
     label_lang: "Bahasa",
-    label_nav: "Navigasi"
+    label_nav: "Navigasi",
+    limit_alert: "Maks 3 persona.",
+    delete_confirm: "Apakah Anda yakin?"
   }
 };
 
@@ -319,7 +332,6 @@ function App() {
 
   const [style, setStyle] = useState<StyleCode>('auto');
   
-  // ★ Menu Control
   const [showMenu, setShowMenu] = useState(false);
   
   const [customPersonas, setCustomPersonas] = useState<any[]>([]);
@@ -358,7 +370,7 @@ function App() {
     }
   }, []);
 
-  // ★ 追加: ユーザー情報フェッチ (リロード時に画像を復元)
+  // ユーザー情報フェッチ (画像復元)
   useEffect(() => {
     if (user?.email) {
       fetch(`${API_URL}/api/user?email=${user.email}`)
@@ -367,7 +379,6 @@ function App() {
           if (data.custom_personas) {
             setCustomPersonas(data.custom_personas);
           }
-          // URLパラメータよりDBが新しい場合は更新
           if (data.streak !== undefined) setUser(prev => prev ? { ...prev, streak: data.streak } : null);
           if (data.is_pro !== undefined) setUser(prev => prev ? { ...prev, is_pro: data.is_pro } : null);
         })
@@ -530,6 +541,13 @@ function App() {
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0] || !user) return;
+    
+    // ★ 上限チェック (フロント側)
+    if (customPersonas.length >= MAX_CUSTOM_PERSONAS) {
+      alert(t.limit_alert);
+      return;
+    }
+
     setIsAnalyzing(true);
     try {
       const base64 = await processImage(e.target.files[0]);
@@ -545,10 +563,39 @@ function App() {
         setStyle(newPersona.id);
         alert(`「${newPersona.label}」の口調を習得しました！`);
       } else {
-        alert("解析に失敗しました: " + (data.error || "Unknown error"));
+        if(data.error === "LIMIT_REACHED") alert(t.limit_alert);
+        else alert("解析に失敗しました: " + (data.error || "Unknown error"));
       }
     } catch (err) { console.error(err); alert("通信エラー"); }
     finally { setIsAnalyzing(false); }
+  };
+
+  // ★ 人格の削除・リネーム
+  const handlePersonaManagement = async (action: 'delete' | 'rename', personaId: string) => {
+    if (!user) return;
+    
+    let newName = "";
+    if (action === 'delete') {
+      if (!window.confirm(t.delete_confirm)) return;
+    } else if (action === 'rename') {
+      const p = customPersonas.find(p => p.id === personaId);
+      const name = window.prompt("New Name:", p?.label);
+      if (!name) return;
+      newName = name;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/persona/manage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email, action, personaId, newName })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCustomPersonas(data.personas);
+        if (action === 'delete' && style === personaId) setStyle('auto');
+      }
+    } catch (e) { alert("Error"); }
   };
 
   const handleShare = async () => {
@@ -878,7 +925,7 @@ function App() {
                  <div style={{display:'flex', flexDirection:'column', gap:'15px'}}>
                    <div>
                      <div style={styles.menuLabel}>{t.label_style}</div>
-                     <div style={{display:'flex', gap:'5px'}}>
+                     <div style={{display:'flex', gap:'5px', marginBottom:'5px'}}>
                        <select value={style} onChange={(e) => setStyle(e.target.value as StyleCode)} style={styles.menuSelect}>
                          <option value="auto">🤖 {t.style_auto}</option>
                          <option value="empathy">🤗 {t.style_empathy}</option>
@@ -895,6 +942,24 @@ function App() {
                          {isAnalyzing ? "⏳" : "📷"}
                        </button>
                      </div>
+                     
+                     {/* ★ カスタム人格の管理リスト */}
+                     {customPersonas.length > 0 && (
+                       <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
+                         {customPersonas.map(p => (
+                           <div key={p.id} style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'5px 0'}}>
+                             <div style={{display:'flex', alignItems:'center', gap:'5px', flex:1, overflow:'hidden'}}>
+                               <img src={p.image} style={{width:'20px', height:'20px', borderRadius:'50%'}} />
+                               <span style={{fontSize:'0.8rem', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{p.label}</span>
+                             </div>
+                             <div style={{display:'flex', gap:'5px'}}>
+                               <button onClick={() => handlePersonaManagement('rename', p.id)} style={{border:'none', background:'none', cursor:'pointer'}}>✏️</button>
+                               <button onClick={() => handlePersonaManagement('delete', p.id)} style={{border:'none', background:'none', cursor:'pointer'}}>🗑️</button>
+                             </div>
+                           </div>
+                         ))}
+                       </div>
+                     )}
                    </div>
 
                    <div>
