@@ -59,7 +59,6 @@ const TRANSLATIONS = {
     upload_btn: "画像解析",
     analyzing: "解析中...",
     
-    // Menu
     menu_title: "Menu",
     label_style: "AIの性格 (Style)",
     label_lang: "言語 (Language)",
@@ -358,6 +357,23 @@ function App() {
       window.history.replaceState({}, '', '/');
     }
   }, []);
+
+  // ★ 追加: ユーザー情報フェッチ (リロード時に画像を復元)
+  useEffect(() => {
+    if (user?.email) {
+      fetch(`${API_URL}/api/user?email=${user.email}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.custom_personas) {
+            setCustomPersonas(data.custom_personas);
+          }
+          // URLパラメータよりDBが新しい場合は更新
+          if (data.streak !== undefined) setUser(prev => prev ? { ...prev, streak: data.streak } : null);
+          if (data.is_pro !== undefined) setUser(prev => prev ? { ...prev, is_pro: data.is_pro } : null);
+        })
+        .catch(console.error);
+    }
+  }, [user?.email]);
 
   useEffect(() => {
     const handler = (e: any) => {
@@ -761,7 +777,6 @@ function App() {
     </div>
   );
 
-  // ★ メニューを開く処理
   const toggleMenu = () => setShowMenu(!showMenu);
   const handleMenuSelect = (view: View) => {
     setCurrentView(view);
@@ -838,10 +853,8 @@ function App() {
                  <span className="pop-in" style={styles.streakValue}>{user.streak} <span style={{fontSize:'1rem'}}>🔥</span></span>
              </div>
              
-             {/* ★ メニューボタン */}
              <button onClick={toggleMenu} style={styles.menuToggleBtn}>☰</button>
 
-             {/* ★ ドロップダウンメニュー */}
              {showMenu && (
                <div className="pop-in" style={styles.menuDropdown}>
                  <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'15px', paddingBottom:'10px', borderBottom:'1px solid #eee'}}>
@@ -849,14 +862,12 @@ function App() {
                    <button onClick={toggleMenu} style={{background:'none', border:'none', fontSize:'1.2rem', cursor:'pointer'}}>✕</button>
                  </div>
 
-                 {/* Upgrade (Free Only) */}
                  {!user.is_pro && (
                    <button onClick={() => { setShowLimitModal(true); setShowMenu(false); }} style={styles.menuUpgradeBtn}>
                      👑 Upgrade to Pro
                    </button>
                  )}
 
-                 {/* Navigation Links */}
                  <div style={{display:'flex', flexDirection:'column', gap:'10px', marginBottom:'20px'}}>
                    <div style={styles.menuLabel}>{t.label_nav}</div>
                    <button onClick={() => handleMenuSelect('chat')} style={{...styles.menuItem, background: currentView==='chat' ? '#f0f9ff' : 'white'}}>💬 {t.menu_chat}</button>
@@ -864,7 +875,6 @@ function App() {
                    <button onClick={() => handleMenuSelect('contact')} style={{...styles.menuItem, background: currentView==='contact' ? '#f0f9ff' : 'white'}}>✉️ {t.menu_contact}</button>
                  </div>
 
-                 {/* Settings */}
                  <div style={{display:'flex', flexDirection:'column', gap:'15px'}}>
                    <div>
                      <div style={styles.menuLabel}>{t.label_style}</div>
@@ -880,7 +890,6 @@ function App() {
                            <option key={p.id} value={p.id}>✨ {p.label}</option>
                          ))}
                        </select>
-                       {/* 画像アップロードボタン */}
                        <input type="file" ref={fileInputRef} onChange={handleImageUpload} style={{display:'none'}} accept="image/*" />
                        <button onClick={() => fileInputRef.current?.click()} style={styles.menuUploadBtn} disabled={isAnalyzing}>
                          {isAnalyzing ? "⏳" : "📷"}
@@ -989,7 +998,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
   streakValue: { fontSize: '1.2rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
   
-  // ★ Menu Styles
+  // Menu Styles
   menuToggleBtn: {
     background: 'none', border: 'none', fontSize: '1.8rem', cursor: 'pointer', padding: '0 5px'
   },
