@@ -50,13 +50,13 @@ const TRANSLATIONS = {
     install_ios_guide: "画面下の「共有」ボタン 📤 をタップし、「ホーム画面に追加 ➕」を選択してください。",
     install_close: "閉じる",
     
-    // ★追加: 口調選択の翻訳
-    style_auto: "AIにお任せ (Auto)",
-    style_empathy: "共感カウンセラー",
-    style_logic: "論理的アナリスト",
-    style_game: "ゲームマスター (RPG)",
-    style_passion: "熱血コーチ",
-    style_minimal: "ミニマリスト (超短文)"
+    // スマホ用に少し短縮
+    style_auto: "自動 (Auto)",
+    style_empathy: "共感",
+    style_logic: "論理",
+    style_game: "RPG風",
+    style_passion: "熱血",
+    style_minimal: "短文"
   },
   en: {
     logo: "Negotiator",
@@ -103,12 +103,12 @@ const TRANSLATIONS = {
     install_ios_guide: "Tap the Share button 📤 below and select 'Add to Home Screen ➕'.",
     install_close: "Close",
     
-    style_auto: "Auto (AI Choice)",
-    style_empathy: "Empathic Counselor",
-    style_logic: "Logical Analyst",
-    style_game: "Game Master (RPG)",
-    style_passion: "Passionate Coach",
-    style_minimal: "Minimalist (Short)"
+    style_auto: "Auto",
+    style_empathy: "Empathy",
+    style_logic: "Logic",
+    style_game: "RPG",
+    style_passion: "Passion",
+    style_minimal: "Short"
   },
   pt: {
     logo: "Negotiator",
@@ -155,12 +155,12 @@ const TRANSLATIONS = {
     install_ios_guide: "Toque em Compartilhar 📤 e selecione 'Adicionar à Tela de Início ➕'.",
     install_close: "Fechar",
     
-    style_auto: "Automático",
-    style_empathy: "Conselheiro Empático",
-    style_logic: "Analista Lógico",
-    style_game: "Mestre de Jogo (RPG)",
-    style_passion: "Treinador Apaixonado",
-    style_minimal: "Minimalista (Curto)"
+    style_auto: "Auto",
+    style_empathy: "Empatia",
+    style_logic: "Lógica",
+    style_game: "RPG",
+    style_passion: "Paixão",
+    style_minimal: "Curto"
   },
   es: {
     logo: "Negotiator",
@@ -207,12 +207,12 @@ const TRANSLATIONS = {
     install_ios_guide: "Toca Compartir 📤 y selecciona 'Añadir a Inicio ➕'.",
     install_close: "Cerrar",
     
-    style_auto: "Automático",
-    style_empathy: "Consejero Empático",
-    style_logic: "Analista Lógico",
-    style_game: "Maestro de Juego (RPG)",
-    style_passion: "Entrenador Apasionado",
-    style_minimal: "Minimalista (Corto)"
+    style_auto: "Auto",
+    style_empathy: "Empatía",
+    style_logic: "Lógica",
+    style_game: "RPG",
+    style_passion: "Pasión",
+    style_minimal: "Corto"
   },
   id: {
     logo: "Negotiator",
@@ -260,11 +260,11 @@ const TRANSLATIONS = {
     install_close: "Tutup",
     
     style_auto: "Otomatis",
-    style_empathy: "Konselor Empati",
-    style_logic: "Analis Logis",
-    style_game: "Game Master (RPG)",
-    style_passion: "Pelatih Penuh Semangat",
-    style_minimal: "Minimalis (Singkat)"
+    style_empathy: "Empati",
+    style_logic: "Logika",
+    style_game: "RPG",
+    style_passion: "Semangat",
+    style_minimal: "Singkat"
   }
 };
 
@@ -286,7 +286,6 @@ function App() {
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
 
-  // ★追加: 口調選択用ステート
   const [style, setStyle] = useState<StyleCode>('auto');
 
   const [lang, setLang] = useState<LangCode>(() => {
@@ -501,7 +500,7 @@ function App() {
           prev_context: lastAiMsg,
           current_goal: currentGoal,
           lang,
-          style // ★追加: 選択されたスタイルを送信
+          style
         }),
       });
       const data = await res.json();
@@ -725,17 +724,16 @@ function App() {
       )}
 
       <header style={styles.header}>
-        <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+        <div style={{display:'flex', alignItems:'center', gap:'8px', minWidth: 0}}>
           <div style={styles.logoIcon}>⚡</div>
-          <div>
+          <div style={{minWidth: 0, flex: 1}}>
             <h1 style={styles.logoText}>{t.logo}</h1>
             {currentGoal && currentView === 'chat' && <div className="fade-in" style={styles.goalText}>{t.goal_prefix} {currentGoal}</div>}
           </div>
         </div>
         
-        <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
-          {/* ★追加: 口調選択プルダウン */}
-          <select value={style} onChange={(e) => setStyle(e.target.value as StyleCode)} style={styles.langSelect}>
+        <div className="header-right" style={{display:'flex', alignItems:'center', gap:'10px', flexShrink: 0}}>
+          <select value={style} onChange={(e) => setStyle(e.target.value as StyleCode)} className="mobile-compact" style={styles.langSelect}>
             <option value="auto">🤖 {t.style_auto}</option>
             <option value="empathy">🤗 {t.style_empathy}</option>
             <option value="logic">🤖 {t.style_logic}</option>
@@ -744,7 +742,7 @@ function App() {
             <option value="minimal">🗿 {t.style_minimal}</option>
           </select>
 
-          <select value={lang} onChange={handleLangChange} style={styles.langSelect}>
+          <select value={lang} onChange={handleLangChange} className="mobile-compact" style={styles.langSelect}>
             <option value="ja">JP</option>
             <option value="en">EN</option>
             <option value="pt">PT</option>
@@ -753,19 +751,19 @@ function App() {
           </select>
           
           {user && (
-             <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+             <div className="header-right" style={{display:'flex', alignItems:'center', gap:'8px'}}>
                <button onClick={() => setCurrentView('chat')} style={{...styles.navBtn, opacity: currentView==='chat'?1:0.5}}>💬</button>
                <button onClick={() => setCurrentView('settings')} style={{...styles.navBtn, opacity: currentView==='settings'?1:0.5}}>💳</button>
                <button onClick={() => setCurrentView('contact')} style={{...styles.navBtn, opacity: currentView==='contact'?1:0.5}}>✉️</button>
                
                {!user.is_pro && (
                  <button onClick={() => setShowLimitModal(true)} style={styles.upgradeHeaderBtn}>
-                   👑 Upgrade
+                   👑 <span className="mobile-hidden">Upgrade</span>
                  </button>
                )}
 
                <div style={styles.streakBox}>
-                 <span style={styles.streakLabel}>{t.streak_label}</span>
+                 <span className="mobile-hidden" style={styles.streakLabel}>{t.streak_label}</span>
                  <span className="pop-in" style={styles.streakValue}>{user.streak}</span>
                </div>
              </div>
@@ -819,6 +817,10 @@ function App() {
           body { font-size: 16px; }
           button { min-height: 44px; }
           input, textarea { font-size: 16px; }
+          
+          .mobile-hidden { display: none !important; }
+          .header-right { gap: 5px !important; }
+          .mobile-compact { font-size: 10px !important; padding: 2px !important; width: auto !important; max-width: 80px; }
         }
       `}</style>
     </div>
