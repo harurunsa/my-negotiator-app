@@ -44,6 +44,32 @@ const COUNTRY_TO_LANG: { [key: string]: string } = {
   'JP': 'ja', 'BR': 'pt', 'PT': 'pt', 'ES': 'es', 'MX': 'es', 'ID': 'id', 'US': 'en'
 };
 
+// 人格（アーキタイプ）定義
+const ARCHETYPES = {
+  empathy: {
+    label: "The Empathic Counselor",
+    prompt: "Tone: Warm, soft, soothing. Focus on emotional support. 'It's okay, let's take a small step.'"
+  },
+  logic: {
+    label: "The Logical Analyst",
+    prompt: "Tone: Precise, efficient, robotic. Focus on efficiency and logic. 'Executing step 1. No emotions required.'"
+  },
+  game: {
+    label: "The Game Master",
+    prompt: "Tone: Playful, RPG-style. Treat tasks as 'Quests' and the user as a 'Hero'. 'Quest Accepted! Your loot awaits!'"
+  },
+  passion: {
+    label: "The Passionate Coach",
+    prompt: "Tone: Hot, energetic, Shuzo Matsuoka style! Push for action! 'You can do it!! Just one step!!'"
+  },
+  minimal: {
+    label: "The Minimalist",
+    prompt: "Tone: Extremely short. Max 5 words per sentence. Direct commands. 'Do it. Now.'"
+  }
+};
+
+type ArchetypeKey = keyof typeof ARCHETYPES;
+
 const MESSAGES: any = {
   ja: { 
     limit_reached: "無料版の制限に達しました。シェアで回復するか、Proへ！",
@@ -142,25 +168,20 @@ app.post('/api/language', async (c) => {
   return c.json({ success: true });
 });
 
-// ★追加: お問い合わせ保存API
 app.post('/api/inquiry', async (c) => {
   try {
     const { email, message } = await c.req.json();
     if (!message || message.trim() === "") return c.json({ error: "Empty message" }, 400);
-    
-    await c.env.DB.prepare(
-      "INSERT INTO inquiries (id, email, message, created_at) VALUES (?, ?, ?, ?)"
-    ).bind(crypto.randomUUID(), email, message, Date.now()).run();
-    
+    await c.env.DB.prepare("INSERT INTO inquiries (id, email, message, created_at) VALUES (?, ?, ?, ?)").bind(crypto.randomUUID(), email, message, Date.now()).run();
     return c.json({ success: true });
-  } catch(e: any) {
-    return c.json({ error: e.message }, 500);
-  }
+  } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
+// --- ★ AI Chat (口調指定対応版) ---
 app.post('/api/chat', async (c) => {
   try {
-    const { message, email, action, prev_context, current_goal, lang = 'en' } = await c.req.json()
+    // style パラメータを受け取る (デフォルトは 'auto')
+    const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
     const apiKey = c.env.GEMINI_API_KEY
     const t = MESSAGES[lang] || MESSAGES.en;
     const langMap: {[key:string]: string} = { ja: 'Japanese', en: 'English', pt: 'Portuguese', es: 'Spanish', id: 'Indonesian' };
@@ -177,6 +198,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
+    // --- 1. タスクリスト処理 ---
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
@@ -189,6 +211,7 @@ app.post('/api/chat', async (c) => {
         const progressText = t.progress ? ` ${t.progress(nextIndex + 1, currentTaskList.length)}` : "";
         const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
         await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
+        
         return c.json({ reply: `${t.next_prefix}${nextTask}${progressText}`, timer_seconds: 180, detected_goal: current_goal, used_archetype: "system_optimized" });
       } else {
         await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
@@ -196,6 +219,35 @@ app.post('/api/chat', async (c) => {
       }
     }
 
+    // --- 2. 人格選択 (手動 vs 自動) ---
+    let selectedKey: ArchetypeKey = 'empathy';
+
+    // ★指定があればそれを使う
+    if (style && style !== 'auto' && ARCHETYPES[style as ArchetypeKey]) {
+      selectedKey = style as ArchetypeKey;
+    } else {
+      // 指定がなければ自動 (バンディット)
+      const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
+      const epsilon = 0.2; 
+      let bestKey: ArchetypeKey = 'empathy';
+      let bestRate = -1;
+
+      Object.keys(ARCHETYPES).forEach((key) => {
+        const k = key as ArchetypeKey;
+        const stat = styleStats[k] || { wins: 0, total: 0 };
+        const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
+        if (rate > bestRate) { bestRate = rate; bestKey = k; }
+      });
+
+      if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
+        const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
+        selectedKey = keys[Math.floor(Math.random() * keys.length)];
+      } else { selectedKey = bestKey; }
+    }
+
+    const archetype = ARCHETYPES[selectedKey];
+
+    // --- 3. プロンプト構築 ---
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
     const currentTaskText = currentTaskList[taskIndex] || "None";
@@ -214,13 +266,18 @@ app.post('/api/chat', async (c) => {
       ${planContext}
       [GOAL]: ${current_goal || "Infer from user input"}
       
-      [CRITICAL RULE]: Task items must be **SHORT ACTION PHRASES ONLY**.
+      [CURRENT PERSONA]: **${archetype.label}**
+      [PERSONA INSTRUCTION]: ${archetype.prompt}
+      
+      [CRITICAL RULE]: 
+      1. Reply MUST reflect the [PERSONA INSTRUCTION] (Tone/Style).
+      2. Task items in "new_task_list" must be **SHORT ACTION PHRASES ONLY**. No conversational filler in the list.
       
       [INSTRUCTIONS]:
       1. **IF 'RETRY' (Impossible)**:
          - Break "${currentTaskText}" down into 2-3 tiny micro-steps.
-         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify if the original task is done.
-         - Output in "new_task_list". Be empathetic in "reply".
+         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify completion.
+         - Output in "new_task_list".
          
       2. **IF 'NORMAL' (New Goal)**:
          - Create a **COMPLETE** step-by-step checklist in "new_task_list".
@@ -230,10 +287,11 @@ app.post('/api/chat', async (c) => {
 
       [OUTPUT FORMAT]: JSON ONLY.
       {
-        "reply": "Conversational response",
+        "reply": "Conversational response in Persona Tone",
         "new_task_list": ["Action 1", "Action 2"...] (Optional),
         "timer_seconds": 180,
-        "detected_goal": "Goal String"
+        "detected_goal": "Goal String",
+        "used_archetype": "${selectedKey}"
       }
     `;
 
@@ -250,8 +308,10 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "通信エラーが発生しました。" : "Connection error.", timer_seconds: 60 };
+      result = { reply: lang === 'ja' ? "通信エラーが発生しました。" : "Connection error.", timer_seconds: 60, used_archetype: selectedKey };
     }
+    
+    if (!result.used_archetype) result.used_archetype = selectedKey;
 
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
@@ -270,7 +330,24 @@ app.post('/api/chat', async (c) => {
   } catch (e: any) { return c.json({ reply: `System Error: ${e.message}`, timer_seconds: 0 }); }
 })
 
-app.post('/api/feedback', async (c) => { /*...*/ return c.json({streak:0}); });
+// --- 4. フィードバック処理 (統計更新) ---
+app.post('/api/feedback', async (c) => {
+  const { email, used_archetype, is_success } = await c.req.json();
+  try {
+    const user: any = await c.env.DB.prepare("SELECT style_stats, streak FROM users WHERE email = ?").bind(email).first();
+    let stats = user.style_stats ? JSON.parse(user.style_stats) : {};
+    
+    if (used_archetype && used_archetype !== 'system_optimized' && used_archetype !== 'system_complete') {
+        if (!stats[used_archetype]) stats[used_archetype] = { wins: 0, total: 0 };
+        stats[used_archetype].total += 1;
+        if (is_success) stats[used_archetype].wins += 1;
+        await c.env.DB.prepare("UPDATE users SET style_stats = ?, streak = streak + ? WHERE email = ?").bind(JSON.stringify(stats), is_success ? 1 : 0, email).run();
+    } else {
+        if(is_success) await c.env.DB.prepare("UPDATE users SET streak = streak + 1 WHERE email = ?").bind(email).run();
+    }
+    return c.json({ streak: user.streak + (is_success ? 1 : 0) });
+  } catch (e) { return c.json({ error: "DB Error" }, 500); }
+});
 
 app.post('/api/share-recovery', async (c) => {
   try {
@@ -324,6 +401,38 @@ app.post('/api/portal', async (c) => {
   } catch (e: any) { return c.json({ error: e.message }, 500); }
 });
 
-app.post('/api/webhook', async (c) => { /*...*/ return c.text('Received'); });
+app.post('/api/webhook', async (c) => {
+  const secret = c.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
+  const signature = c.req.header('x-signature');
+  const bodyText = await c.req.text();
+  if (!signature) return c.text('No signature', 400);
+  
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sigBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(bodyText));
+  const hashArray = Array.from(new Uint8Array(sigBuffer));
+  const hexSignature = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  if (hexSignature !== signature) return c.text('Invalid signature', 400);
+
+  const body = JSON.parse(bodyText);
+  const eventName = body.meta.event_name;
+  const customData = body.meta.custom_data || {};
+  const attributes = body.data.attributes;
+
+  try {
+    if (eventName === 'subscription_created' || eventName === 'subscription_updated') {
+      const email = attributes.user_email || customData.user_email;
+      const customerId = attributes.customer_id; 
+      const status = attributes.status;
+      const isPro = (status === 'active' || status === 'on_trial') ? 1 : 0;
+      if (email) await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?").bind(isPro, customerId, email).run();
+    }
+    if (eventName === 'subscription_cancelled' || eventName === 'subscription_expired') {
+       const email = attributes.user_email || customData.user_email;
+       if (email) await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE email = ?").bind(email).run();
+    }
+  } catch (e) { return c.text('DB Update Failed', 500); }
+  return c.text('Received', 200);
+});
 
 export default app
