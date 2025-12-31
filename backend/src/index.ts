@@ -21,7 +21,6 @@ type PersonaAnalysisResult = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// ★設定: カスタム人格の最大数
 const MAX_CUSTOM_PERSONAS = 3; 
 
 // CORS制限
@@ -38,9 +37,8 @@ app.use('/*', async (c, next) => {
 });
 
 const DAILY_LIMIT = 5;
-const MAX_CONTEXT_CHARS = 1500;
+const MAX_CONTEXT_CHARS = 2000; // コンテキストサイズ拡張
 
-// --- PPP設定 ---
 const PPP_DISCOUNTS: { [key: string]: string } = {
   'IN': 'PPP50', 'BR': 'PPP50', 'ID': 'PPP50', 'PH': 'PPP50', 
   'VN': 'PPP50', 'EG': 'PPP50', 'NG': 'PPP50', 'BD': 'PPP50', 'PK': 'PPP50',
@@ -79,21 +77,11 @@ const ARCHETYPES: any = {
 type ArchetypeKey = keyof typeof ARCHETYPES;
 
 const MESSAGES: any = {
-  ja: { 
-    limit_reached: "無料版の制限に達しました。シェアで回復するか、Proへ！",
-    complete: "🎉 すべてのタスクが完了しました！素晴らしい達成です！次はどうしますか？",
-    next_prefix: "👍 ナイス！次はこれです: ",
-    progress: (cur: number, tot: number) => `(進捗: ${cur}/${tot})`
-  },
-  en: { 
-    limit_reached: "Free limit reached. Share or Upgrade!",
-    complete: "🎉 All tasks completed! Amazing work! What's next?",
-    next_prefix: "👍 Nice! Next up: ",
-    progress: (cur: number, tot: number) => `(Step: ${cur}/${tot})`
-  },
-  pt: { limit_reached: "Limite atingido.", complete: "🎉 Tarefas concluídas!", next_prefix: "👍 Boa! Próximo: ", progress: (c:number, t:number) => `(${c}/${t})` },
-  es: { limit_reached: "Límite alcanzado.", complete: "🎉 ¡Tareas completadas!", next_prefix: "👍 ¡Bien! Siguiente: ", progress: (c:number, t:number) => `(${c}/${t})` },
-  id: { limit_reached: "Batas tercapai.", complete: "🎉 Semua tugas selesai!", next_prefix: "👍 Bagus! Berikutnya: ", progress: (c:number, t:number) => `(${c}/${t})` }
+  ja: { limit_reached: "無料版の制限に達しました。シェアで回復するか、Proへ！" },
+  en: { limit_reached: "Free limit reached. Share or Upgrade!" },
+  pt: { limit_reached: "Limite atingido." },
+  es: { limit_reached: "Límite alcanzado." },
+  id: { limit_reached: "Batas tercapai." }
 };
 
 // --- Helper Functions ---
@@ -170,7 +158,6 @@ app.get('/auth/callback', async (c) => {
 
 // --- API Endpoints ---
 
-// ユーザー情報の取得 (カスタム人格復元用)
 app.get('/api/user', async (c) => {
   const email = c.req.query('email');
   if (!email) return c.json({ error: "Email required" }, 400);
@@ -202,11 +189,9 @@ app.post('/api/inquiry', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// ★追加: カスタム人格の管理 (リネーム・削除)
 app.post('/api/persona/manage', async (c) => {
   try {
     const { email, action, personaId, newName } = await c.req.json();
-    
     const user: any = await c.env.DB.prepare("SELECT custom_personas FROM users WHERE email = ?").bind(email).first();
     let personas = user?.custom_personas ? JSON.parse(user.custom_personas) : [];
 
@@ -220,24 +205,23 @@ app.post('/api/persona/manage', async (c) => {
     }
 
     await c.env.DB.prepare("UPDATE users SET custom_personas = ? WHERE email = ?").bind(JSON.stringify(personas), email).run();
-    return c.json({ success: true, personas }); // 更新後のリストを返す
+    return c.json({ success: true, personas }); 
   } catch(e: any) {
     return c.json({ error: e.message }, 500);
   }
 });
 
-// 画像解析API (制限追加)
+// 画像解析API
 app.post('/api/analyze-persona', async (c) => {
   try {
     const { email, imageBase64, lang = 'ja' } = await c.req.json();
     const apiKey = c.env.GEMINI_API_KEY;
 
-    // ★ 制限チェック
     const user: any = await c.env.DB.prepare("SELECT custom_personas FROM users WHERE email = ?").bind(email).first();
     let currentPersonas = user?.custom_personas ? JSON.parse(user.custom_personas) : [];
     
     if (currentPersonas.length >= MAX_CUSTOM_PERSONAS) {
-      return c.json({ error: "LIMIT_REACHED", message: `Max ${MAX_CUSTOM_PERSONAS} personas allowed.` }, 400);
+      return c.json({ error: "LIMIT_REACHED" }, 400);
     }
 
     const cleanBase64 = imageBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
@@ -286,7 +270,6 @@ app.post('/api/analyze-persona', async (c) => {
     };
     
     currentPersonas.push(newPersona);
-    // 上限を超えた場合は後ろを削除（二重チェック）
     if (currentPersonas.length > MAX_CUSTOM_PERSONAS) currentPersonas = currentPersonas.slice(0, MAX_CUSTOM_PERSONAS);
 
     await c.env.DB.prepare("UPDATE users SET custom_personas = ? WHERE email = ?").bind(JSON.stringify(currentPersonas), email).run();
@@ -298,7 +281,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// Chat API
+// ★ AI Chat (改良版: 口調維持 & ロジック修正)
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -318,26 +301,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    let currentTaskList: string[] = [];
-    try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
-    let taskIndex = user.current_task_index || 0;
-
-    if (action === 'next') {
-      let nextIndex = taskIndex + 1;
-      if (nextIndex < currentTaskList.length) {
-        const nextTask = currentTaskList[nextIndex];
-        const completedTask = currentTaskList[taskIndex];
-        const progressText = t.progress ? ` ${t.progress(nextIndex + 1, currentTaskList.length)}` : "";
-        const updatedMemory = truncateContext((user.memory || "") + ` [System Log]: User completed task "${completedTask}".`);
-        await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
-        
-        return c.json({ reply: `${t.next_prefix}${nextTask}${progressText}`, timer_seconds: 180, detected_goal: current_goal, used_archetype: "system_optimized" });
-      } else {
-        await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
-        return c.json({ reply: t.complete, timer_seconds: 0, detected_goal: null, used_archetype: "system_complete" });
-      }
-    }
-
+    // --- 人格決定ロジック ---
     let archetypeLabel = "Empathic Counselor";
     let archetypePrompt = ARCHETYPES['empathy'].prompt;
     let selectedKey = style;
@@ -355,18 +319,17 @@ app.post('/api/chat', async (c) => {
             }
         }
     } else {
+        // 自動 (Bandit Algorithm - Simplified)
         const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
         const epsilon = 0.2; 
         let bestKey: ArchetypeKey = 'empathy';
         let bestRate = -1;
-
         Object.keys(ARCHETYPES).forEach((key) => {
             const k = key as ArchetypeKey;
             const stat = styleStats[k] || { wins: 0, total: 0 };
             const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
             if (rate > bestRate) { bestRate = rate; bestKey = k; }
         });
-
         if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
             const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
             selectedKey = keys[Math.floor(Math.random() * keys.length)];
@@ -376,58 +339,115 @@ app.post('/api/chat', async (c) => {
         archetypePrompt = ARCHETYPES[selectedKey].prompt;
     }
 
+    // --- タスク処理とプロンプト構築 ---
+    let currentTaskList: string[] = [];
+    try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
+    let taskIndex = user.current_task_index || 0;
+    
+    // プロンプト用変数の準備
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
-    const currentTaskText = currentTaskList[taskIndex] || "None";
-    const remainingTasks = currentTaskList.slice(taskIndex + 1); 
-    const planContext = currentTaskList.length > 0 
-      ? `[Current Plan Status]: Working on step ${taskIndex + 1}/${currentTaskList.length} "${currentTaskText}". Future steps: ${JSON.stringify(remainingTasks)}.` 
-      : "[Current Plan Status]: No active plan.";
+    
+    let specialInstruction = "";
+    let systemTaskInfo = "";
+
+    // ★重要: "next" アクションでもAIを通すように変更 (口調維持のため)
+    if (action === 'next') {
+        let nextIndex = taskIndex + 1;
+        if (nextIndex < currentTaskList.length) {
+            const nextTask = currentTaskList[nextIndex];
+            const completedTask = currentTaskList[taskIndex];
+            
+            // DB更新
+            const updatedMemory = truncateContext((user.memory || "") + ` [Log]: Completed "${completedTask}".`);
+            await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
+            
+            // AIへの指示: 完了を祝い、次のタスクをキャラ口調で伝える
+            specialInstruction = `
+              [SITUATION]: The user has COMPLETED the task: "${completedTask}".
+              [NEXT TASK]: "${nextTask}" (${nextIndex + 1}/${currentTaskList.length}).
+              [INSTRUCTION]: Praise the user for finishing the task in your character's tone. Then, clearly state the [NEXT TASK] and encourage them to start it.
+              [FORMAT]: Return "reply" ONLY. Do NOT return "new_task_list".
+            `;
+            // TaskListは更新しないので今のまま
+        } else {
+            // 全完了
+            await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
+            specialInstruction = `
+              [SITUATION]: All tasks are completed!
+              [INSTRUCTION]: Congratulate the user enthusiastically in your character's tone. Ask what they want to do next.
+              [FORMAT]: Return "reply" ONLY.
+            `;
+        }
+    } 
+    
+    else if (action === 'retry') {
+        // ★修正: リトライ時は「見る」「考える」を禁止し、物理的アクションを強制
+        const currentTask = currentTaskList[taskIndex] || "Current Task";
+        const remainingTasks = currentTaskList.slice(taskIndex + 1);
+        
+        specialInstruction = `
+          [SITUATION]: The user feels the task "${currentTask}" is impossible/too hard.
+          [INSTRUCTION]: Break down "${currentTask}" into 2-3 extremely small, PHYSICAL ACTION micro-steps.
+          [PROHIBITED]: Do NOT use passive verbs like "Think", "Decide", "Check", "Look" for the first step.
+          [REQUIRED]: The first step must be a physical movement (e.g., "Stand up", "Touch the trash", "Open the drawer").
+          [OUTPUT]: Generate "new_task_list" with these micro-steps. Also return a "reply" encouraging them.
+        `;
+        systemTaskInfo = `Remaining tasks after this: ${JSON.stringify(remainingTasks)}`;
+    }
+    
+    else { // action === 'normal'
+        // 通常会話 or 新規目標設定
+        const currentTaskText = currentTaskList[taskIndex] || "None";
+        const planContext = currentTaskList.length > 0 
+          ? `[Current Plan]: Step ${taskIndex + 1}/${currentTaskList.length} "${currentTaskText}".` 
+          : "[Current Plan]: No active plan.";
+          
+        specialInstruction = `
+          [SITUATION]: User sent a message.
+          [INSTRUCTION]: 
+          1. If the user states a new goal (e.g. "Clean room"), create a step-by-step "new_task_list". Steps must be CONCRETE ACTIONS, not vague concepts.
+          2. If just chatting, reply in character (return "reply" only).
+          3. If the user is stuck, give a hint based on [Current Plan].
+        `;
+        systemTaskInfo = planContext;
+    }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
-    const systemInstruction = `
+    const systemInstructionContent = `
       You are an Executive Function Augmentation AI.
       [Language]: Reply in **${targetLangName}**.
       [User Memory]: ${userMemory}
       [Context]: ${safePrevContext}
-      ${planContext}
       [GOAL]: ${current_goal || "Infer from user input"}
       
       [CURRENT PERSONA]: **${archetypeLabel}**
       [PERSONA INSTRUCTION]: ${archetypePrompt}
       
-      [CRITICAL RULE]: 
-      1. Reply MUST reflect the [PERSONA INSTRUCTION] (Tone/Style/Roleplay).
-      2. Task items in "new_task_list" must be **SHORT ACTION PHRASES ONLY**. No conversational filler in the list.
+      [CORE RULES]:
+      1. **ALWAYS** speak in the [CURRENT PERSONA] tone. Never break character.
+      2. When creating tasks, use short, imperative physical actions (e.g., "Pick up pen", "Open app"). Avoid "Think about..." or "Plan...".
       
-      [INSTRUCTIONS]:
-      1. **IF 'RETRY' (Impossible)**:
-         - Break "${currentTaskText}" down into 2-3 tiny micro-steps.
-         - **IMPORTANT**: The last micro-step MUST be a "Check" step to verify completion.
-         - Output in "new_task_list".
-         
-      2. **IF 'NORMAL' (New Goal)**:
-         - Create a **COMPLETE** step-by-step checklist in "new_task_list".
-      
-      3. **IF 'NORMAL' (Chat/Motivation)**:
-         - If just chatting, **DO NOT** return "new_task_list". Return "reply" only.
+      ${specialInstruction}
+      ${systemTaskInfo}
 
       [OUTPUT FORMAT]: JSON ONLY.
       {
         "reply": "Conversational response in Persona Tone",
-        "new_task_list": ["Action 1", "Action 2"...] (Optional),
+        "new_task_list": ["Action 1", "Action 2"...] (Optional, only if plan changes),
         "timer_seconds": 180,
         "detected_goal": "Goal String",
         "used_archetype": "${selectedKey}"
       }
     `;
 
-    const requestText = `User: ${message} (Action: ${action})`;
+    const requestText = `User: ${message || (action === 'next' ? "I finished the task." : "Help")}`;
+    
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstruction + "\n\n" + requestText }] }], generationConfig: { response_mime_type: "application/json" } })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent + "\n\n" + requestText }] }], generationConfig: { response_mime_type: "application/json" } })
     });
 
     const data: any = await response.json();
@@ -436,26 +456,37 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "通信エラーが発生しました。" : "Connection error.", timer_seconds: 60, used_archetype: selectedKey };
+      result = { reply: lang === 'ja' ? "エラーが発生しました。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
     }
     
     if (!result.used_archetype) result.used_archetype = selectedKey;
 
+    // タスクリスト更新処理 (Normal/Retry時のみ)
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
-      if (action === 'retry') finalTaskList = [...result.new_task_list, ...remainingTasks];
-      else finalTaskList = result.new_task_list;
+      if (action === 'retry') {
+          // Retryの場合は、残りのタスクを維持しつつ、先頭にマイクロステップを挿入
+          const remaining = currentTaskList.slice(taskIndex + 1);
+          finalTaskList = [...result.new_task_list, ...remaining];
+      } else {
+          finalTaskList = result.new_task_list;
+      }
       await c.env.DB.prepare("UPDATE users SET task_list = ?, current_task_index = 0 WHERE email = ?").bind(JSON.stringify(finalTaskList), email).run();
     }
 
+    // メモリ更新
     if (result.reply) {
       c.executionCtx.waitUntil((async () => {
         const newMem = truncateContext(userMemory + ` U:${message} A:${result.reply}`);
         await c.env.DB.prepare("UPDATE users SET memory = ? WHERE email = ?").bind(newMem, email).run();
       })());
     }
+    
     return c.json(result);
-  } catch (e: any) { return c.json({ reply: `System Error: ${e.message}`, timer_seconds: 0 }); }
+
+  } catch (e: any) { 
+    return c.json({ reply: `System Error: ${e.message}`, timer_seconds: 0 }); 
+  }
 })
 
 // --- Feedback & Others ---
