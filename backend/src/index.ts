@@ -21,6 +21,9 @@ type PersonaAnalysisResult = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
+// ★設定: カスタム人格の最大数
+const MAX_CUSTOM_PERSONAS = 3; 
+
 // CORS制限
 app.use('/*', async (c, next) => {
   const corsMiddleware = cors({
@@ -167,7 +170,7 @@ app.get('/auth/callback', async (c) => {
 
 // --- API Endpoints ---
 
-// ★追加: ユーザー情報の取得 (画像人格データの復元用)
+// ユーザー情報の取得 (カスタム人格復元用)
 app.get('/api/user', async (c) => {
   const email = c.req.query('email');
   if (!email) return c.json({ error: "Email required" }, 400);
@@ -199,11 +202,43 @@ app.post('/api/inquiry', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// ★ 画像解析API
+// ★追加: カスタム人格の管理 (リネーム・削除)
+app.post('/api/persona/manage', async (c) => {
+  try {
+    const { email, action, personaId, newName } = await c.req.json();
+    
+    const user: any = await c.env.DB.prepare("SELECT custom_personas FROM users WHERE email = ?").bind(email).first();
+    let personas = user?.custom_personas ? JSON.parse(user.custom_personas) : [];
+
+    if (action === 'delete') {
+      personas = personas.filter((p: any) => p.id !== personaId);
+    } else if (action === 'rename') {
+      personas = personas.map((p: any) => {
+        if (p.id === personaId) return { ...p, label: newName };
+        return p;
+      });
+    }
+
+    await c.env.DB.prepare("UPDATE users SET custom_personas = ? WHERE email = ?").bind(JSON.stringify(personas), email).run();
+    return c.json({ success: true, personas }); // 更新後のリストを返す
+  } catch(e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// 画像解析API (制限追加)
 app.post('/api/analyze-persona', async (c) => {
   try {
     const { email, imageBase64, lang = 'ja' } = await c.req.json();
     const apiKey = c.env.GEMINI_API_KEY;
+
+    // ★ 制限チェック
+    const user: any = await c.env.DB.prepare("SELECT custom_personas FROM users WHERE email = ?").bind(email).first();
+    let currentPersonas = user?.custom_personas ? JSON.parse(user.custom_personas) : [];
+    
+    if (currentPersonas.length >= MAX_CUSTOM_PERSONAS) {
+      return c.json({ error: "LIMIT_REACHED", message: `Max ${MAX_CUSTOM_PERSONAS} personas allowed.` }, 400);
+    }
 
     const cleanBase64 = imageBase64.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
 
@@ -243,9 +278,6 @@ app.post('/api/analyze-persona', async (c) => {
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
     const analysis: PersonaAnalysisResult = JSON.parse(extractJson(rawText));
 
-    const user: any = await c.env.DB.prepare("SELECT custom_personas FROM users WHERE email = ?").bind(email).first();
-    let currentPersonas = user?.custom_personas ? JSON.parse(user.custom_personas) : [];
-    
     const newPersona = {
       id: `custom_${Date.now()}`,
       label: analysis.label,
@@ -254,7 +286,8 @@ app.post('/api/analyze-persona', async (c) => {
     };
     
     currentPersonas.push(newPersona);
-    if (currentPersonas.length > 3) currentPersonas.shift();
+    // 上限を超えた場合は後ろを削除（二重チェック）
+    if (currentPersonas.length > MAX_CUSTOM_PERSONAS) currentPersonas = currentPersonas.slice(0, MAX_CUSTOM_PERSONAS);
 
     await c.env.DB.prepare("UPDATE users SET custom_personas = ? WHERE email = ?").bind(JSON.stringify(currentPersonas), email).run();
 
@@ -265,7 +298,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// ★ AI Chat
+// Chat API
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
