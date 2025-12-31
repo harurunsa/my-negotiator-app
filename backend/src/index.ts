@@ -23,7 +23,6 @@ const app = new Hono<{ Bindings: Bindings }>()
 
 const MAX_CUSTOM_PERSONAS = 3; 
 
-// CORS制限
 app.use('/*', async (c, next) => {
   const corsMiddleware = cors({
     origin: c.env.FRONTEND_URL || '*',
@@ -37,8 +36,9 @@ app.use('/*', async (c, next) => {
 });
 
 const DAILY_LIMIT = 5;
-const MAX_CONTEXT_CHARS = 2000; // コンテキストサイズ拡張
+const MAX_CONTEXT_CHARS = 2000;
 
+// (PPP設定等は省略なしで維持)
 const PPP_DISCOUNTS: { [key: string]: string } = {
   'IN': 'PPP50', 'BR': 'PPP50', 'ID': 'PPP50', 'PH': 'PPP50', 
   'VN': 'PPP50', 'EG': 'PPP50', 'NG': 'PPP50', 'BD': 'PPP50', 'PK': 'PPP50',
@@ -50,7 +50,7 @@ const COUNTRY_TO_LANG: { [key: string]: string } = {
   'JP': 'ja', 'BR': 'pt', 'PT': 'pt', 'ES': 'es', 'MX': 'es', 'ID': 'id', 'US': 'en'
 };
 
-// 人格（アーキタイプ）定義
+// 人格定義
 const ARCHETYPES: any = {
   empathy: {
     label: "The Empathic Counselor",
@@ -84,7 +84,7 @@ const MESSAGES: any = {
   id: { limit_reached: "Batas tercapai." }
 };
 
-// --- Helper Functions ---
+// Helper Functions
 function extractJson(text: string): string {
   let cleaned = text.replace(/```json\s*|\s*```/g, '');
   const start = cleaned.indexOf('{');
@@ -115,7 +115,7 @@ async function callLemonSqueezy(path: string, method: string, apiKey: string, bo
   return data;
 }
 
-// --- Auth Routes ---
+// Auth Routes (変更なし)
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -156,8 +156,7 @@ app.get('/auth/callback', async (c) => {
   } catch (e: any) { return c.text(`Auth Error: ${e.message}`, 500) }
 })
 
-// --- API Endpoints ---
-
+// API Endpoints
 app.get('/api/user', async (c) => {
   const email = c.req.query('email');
   if (!email) return c.json({ error: "Email required" }, 400);
@@ -281,7 +280,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// ★ AI Chat (改良版: 口調維持 & ロジック修正)
+// ★ AI Chat (改良完全版)
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -319,7 +318,6 @@ app.post('/api/chat', async (c) => {
             }
         }
     } else {
-        // 自動 (Bandit Algorithm - Simplified)
         const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
         const epsilon = 0.2; 
         let bestKey: ArchetypeKey = 'empathy';
@@ -344,14 +342,13 @@ app.post('/api/chat', async (c) => {
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
     
-    // プロンプト用変数の準備
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
     
     let specialInstruction = "";
     let systemTaskInfo = "";
 
-    // ★重要: "next" アクションでもAIを通すように変更 (口調維持のため)
+    // ★ Next アクション: AIが喋るように変更 (システム定型文廃止)
     if (action === 'next') {
         let nextIndex = taskIndex + 1;
         if (nextIndex < currentTaskList.length) {
@@ -359,58 +356,57 @@ app.post('/api/chat', async (c) => {
             const completedTask = currentTaskList[taskIndex];
             
             // DB更新
-            const updatedMemory = truncateContext((user.memory || "") + ` [Log]: Completed "${completedTask}".`);
+            const updatedMemory = truncateContext((user.memory || "") + ` [Log]: User completed "${completedTask}".`);
             await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
             
-            // AIへの指示: 完了を祝い、次のタスクをキャラ口調で伝える
+            // AIへの指示: 完了を祝い、次のタスク（進捗付き）をキャラ口調で伝える
             specialInstruction = `
-              [SITUATION]: The user has COMPLETED the task: "${completedTask}".
-              [NEXT TASK]: "${nextTask}" (${nextIndex + 1}/${currentTaskList.length}).
-              [INSTRUCTION]: Praise the user for finishing the task in your character's tone. Then, clearly state the [NEXT TASK] and encourage them to start it.
-              [FORMAT]: Return "reply" ONLY. Do NOT return "new_task_list".
+              [SITUATION]: User has COMPLETED the task: "${completedTask}".
+              [NEXT TASK]: "${nextTask}".
+              [PROGRESS]: ${nextIndex + 1} / ${currentTaskList.length}.
+              [INSTRUCTION]: 
+              1. Praise the user for finishing the task in [CURRENT PERSONA]'s tone. 
+              2. Explicitly state the [NEXT TASK] and the [PROGRESS].
+              3. Encourage them to start the next task immediately.
+              [FORMAT]: Return "reply" ONLY. Do NOT generate a new list.
             `;
-            // TaskListは更新しないので今のまま
         } else {
             // 全完了
             await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
             specialInstruction = `
               [SITUATION]: All tasks are completed!
-              [INSTRUCTION]: Congratulate the user enthusiastically in your character's tone. Ask what they want to do next.
+              [INSTRUCTION]: Congratulate the user enthusiastically in [CURRENT PERSONA]'s tone. Ask what they want to do next.
               [FORMAT]: Return "reply" ONLY.
             `;
         }
     } 
     
     else if (action === 'retry') {
-        // ★修正: リトライ時は「見る」「考える」を禁止し、物理的アクションを強制
         const currentTask = currentTaskList[taskIndex] || "Current Task";
         const remainingTasks = currentTaskList.slice(taskIndex + 1);
         
         specialInstruction = `
           [SITUATION]: The user feels the task "${currentTask}" is impossible/too hard.
-          [INSTRUCTION]: Break down "${currentTask}" into 2-3 extremely small, PHYSICAL ACTION micro-steps.
-          [PROHIBITED]: Do NOT use passive verbs like "Think", "Decide", "Check", "Look" for the first step.
-          [REQUIRED]: The first step must be a physical movement (e.g., "Stand up", "Touch the trash", "Open the drawer").
-          [OUTPUT]: Generate "new_task_list" with these micro-steps. Also return a "reply" encouraging them.
+          [INSTRUCTION]: Break down "${currentTask}" into 2-3 tiny PHYSICAL ACTION micro-steps.
+          [FORBIDDEN]: **DO NOT USE** vague verbs like "Check", "Look", "Think", "Decide", "Plan".
+          [REQUIRED]: Use ONLY physical verbs like "Stand up", "Touch", "Pick up", "Throw", "Open".
+          [OUTPUT]: Generate "new_task_list". Also return a "reply" encouraging them.
         `;
-        systemTaskInfo = `Remaining tasks after this: ${JSON.stringify(remainingTasks)}`;
+        systemTaskInfo = `Remaining tasks to keep: ${JSON.stringify(remainingTasks)}`;
     }
     
     else { // action === 'normal'
         // 通常会話 or 新規目標設定
-        const currentTaskText = currentTaskList[taskIndex] || "None";
-        const planContext = currentTaskList.length > 0 
-          ? `[Current Plan]: Step ${taskIndex + 1}/${currentTaskList.length} "${currentTaskText}".` 
-          : "[Current Plan]: No active plan.";
-          
         specialInstruction = `
-          [SITUATION]: User sent a message.
+          [SITUATION]: User input received.
           [INSTRUCTION]: 
-          1. If the user states a new goal (e.g. "Clean room"), create a step-by-step "new_task_list". Steps must be CONCRETE ACTIONS, not vague concepts.
-          2. If just chatting, reply in character (return "reply" only).
-          3. If the user is stuck, give a hint based on [Current Plan].
+          1. IF user states a GOAL (e.g. "Clean room"):
+             - Create a step-by-step "new_task_list".
+             - **CRITICAL**: Steps must be PHYSICAL ACTIONS (e.g. "Get trash bag", "Pick up bottles"). 
+             - **FORBIDDEN**: "Look at room", "Decide where to start". These are too hard for ADHD.
+          2. IF just chatting:
+             - Reply in [CURRENT PERSONA] tone (return "reply" only).
         `;
-        systemTaskInfo = planContext;
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
@@ -427,7 +423,9 @@ app.post('/api/chat', async (c) => {
       
       [CORE RULES]:
       1. **ALWAYS** speak in the [CURRENT PERSONA] tone. Never break character.
-      2. When creating tasks, use short, imperative physical actions (e.g., "Pick up pen", "Open app"). Avoid "Think about..." or "Plan...".
+      2. **ACTION BIAS**: When creating tasks, use CONCRETE PHYSICAL ACTIONS. 
+         - BAD: "Assess the mess."
+         - GOOD: "Pick up one piece of trash."
       
       ${specialInstruction}
       ${systemTaskInfo}
@@ -435,7 +433,7 @@ app.post('/api/chat', async (c) => {
       [OUTPUT FORMAT]: JSON ONLY.
       {
         "reply": "Conversational response in Persona Tone",
-        "new_task_list": ["Action 1", "Action 2"...] (Optional, only if plan changes),
+        "new_task_list": ["Action 1", "Action 2"...] (Optional),
         "timer_seconds": 180,
         "detected_goal": "Goal String",
         "used_archetype": "${selectedKey}"
@@ -456,19 +454,20 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "エラーが発生しました。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
+      result = { reply: lang === 'ja' ? "通信エラー。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
     }
     
     if (!result.used_archetype) result.used_archetype = selectedKey;
 
-    // タスクリスト更新処理 (Normal/Retry時のみ)
+    // タスクリスト更新処理
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
       if (action === 'retry') {
-          // Retryの場合は、残りのタスクを維持しつつ、先頭にマイクロステップを挿入
+          // Retryは残りのタスクを後ろにつける
           const remaining = currentTaskList.slice(taskIndex + 1);
           finalTaskList = [...result.new_task_list, ...remaining];
       } else {
+          // Normal (新規目標) は完全に上書き
           finalTaskList = result.new_task_list;
       }
       await c.env.DB.prepare("UPDATE users SET task_list = ?, current_task_index = 0 WHERE email = ?").bind(JSON.stringify(finalTaskList), email).run();
@@ -489,7 +488,7 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// --- Feedback & Others ---
+// (Feedback, Share, Checkout, Portal, Webhook は変更なし)
 app.post('/api/feedback', async (c) => {
   const { email, used_archetype, is_success } = await c.req.json();
   try {
