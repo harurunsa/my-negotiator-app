@@ -175,8 +175,7 @@ app.post('/api/inquiry', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// ★追加: 手動確認用API (Webhookの代わり)
-// フロントエンドから呼ばれると、Stripeに問い合わせてDBを更新する
+// ★ 能動的確認用API (Webhookの代わり)
 app.post('/api/verify-subscription', async (c) => {
   try {
     const { email } = await c.req.json();
@@ -189,22 +188,21 @@ app.post('/api/verify-subscription', async (c) => {
     }
     const customerId = customers.data[0].id;
 
-    // 2. その顧客の有効なサブスクリプションを確認
+    // 2. 有効なサブスクリプションを確認
     const subscriptions = await stripe.subscriptions.list({
       customer: customerId,
       status: 'active',
       limit: 1
     });
 
-    // 3. トライアル中も含めるか判定
+    // 3. トライアル中も含める
     let isPro = subscriptions.data.length > 0 ? 1 : 0;
-    
     if (!isPro) {
         const trials = await stripe.subscriptions.list({ customer: customerId, status: 'trialing', limit: 1 });
         if (trials.data.length > 0) isPro = 1;
     }
 
-    // 4. DBを更新
+    // 4. DB更新
     await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?")
       .bind(isPro, customerId, email).run();
 
@@ -215,6 +213,7 @@ app.post('/api/verify-subscription', async (c) => {
   }
 });
 
+// カスタム人格管理
 app.post('/api/persona/manage', async (c) => {
   try {
     const { email, action, personaId, newName } = await c.req.json();
@@ -462,7 +461,7 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "準備はいい？次へ行こう！" : "Ready? Let's go!", timer_seconds: 60, used_archetype: selectedKey };
+      result = { reply: lang === 'ja' ? "通信エラーが発生しました。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
     }
     
     if (!result.reply || result.reply.trim() === "") {
@@ -522,6 +521,7 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e: any) { return c.json({ error: "DB Error", details: e.message }, 500); }
 });
 
+// ★ Stripe Checkout (エラー自動修復付き)
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
@@ -530,7 +530,7 @@ app.post('/api/checkout', async (c) => {
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     let customerId = user?.stripe_customer_id;
 
-    // 顧客IDの取得・作成関数
+    // 顧客作成関数
     const createNewCustomer = async () => {
       const customer = await stripe.customers.create({ email });
       await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(customer.id, email).run();
@@ -548,11 +548,11 @@ app.post('/api/checkout', async (c) => {
           line_items: [{ price: priceId, quantity: 1 }],
           mode: 'subscription',
           success_url: `${c.env.FRONTEND_URL}/?payment=success`,
-          cancel_url: `${c.env.FRONTEND_URL}/?payment=cancelled`,
+          cancel_url: `${c.env.FRONTEND_URL}/`,
         });
         if (session.url) return c.json({ url: session.url });
     } catch (err: any) {
-        // IDが無効な場合（開発環境でリセットなど）、作り直して再試行
+        // IDが無効な場合（削除済みなど）、作り直して再試行
         if (err.code === 'resource_missing') {
             customerId = await createNewCustomer();
             const session = await stripe.checkout.sessions.create({
@@ -561,7 +561,7 @@ app.post('/api/checkout', async (c) => {
                 line_items: [{ price: priceId, quantity: 1 }],
                 mode: 'subscription',
                 success_url: `${c.env.FRONTEND_URL}/?payment=success`,
-                cancel_url: `${c.env.FRONTEND_URL}/?payment=cancelled`,
+                cancel_url: `${c.env.FRONTEND_URL}/`,
             });
             if (session.url) return c.json({ url: session.url });
         } else { throw err; }
@@ -570,6 +570,7 @@ app.post('/api/checkout', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
+// ★ Stripe Portal (エラー処理付き)
 app.post('/api/portal', async (c) => {
   try {
     const { email } = await c.req.json();
@@ -578,51 +579,26 @@ app.post('/api/portal', async (c) => {
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     if (!user || !user.stripe_customer_id) return c.json({ error: "No billing information found" }, 404);
 
-    const session = await stripe.billingPortal.sessions.create({
-      customer: user.stripe_customer_id,
-      return_url: `${c.env.FRONTEND_URL}/`,
-    });
-
-    if (session.url) return c.json({ url: session.url });
-    else throw new Error("Portal URL not found");
+    try {
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripe_customer_id,
+        return_url: `${c.env.FRONTEND_URL}/`,
+      });
+      if (session.url) return c.json({ url: session.url });
+    } catch (err: any) {
+      // 顧客IDが無効ならIDをリセットしてエラーを返す
+      if (err.code === 'resource_missing') {
+         await c.env.DB.prepare("UPDATE users SET stripe_customer_id = NULL WHERE email = ?").bind(email).run();
+         return c.json({ error: "Billing info reset. Please upgrade again." }, 400);
+      }
+      throw err;
+    }
+    throw new Error("No URL");
   } catch (e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// Webhook (一応残す)
+// Webhook (Stripeのエラーログ回避のため一応残すが、処理は空でもOK)
 app.post('/api/webhook', async (c) => {
-  const sig = c.req.header('stripe-signature');
-  const body = await c.req.text();
-  const stripe = new Stripe(c.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
-
-  let event;
-  try {
-    if (!sig) throw new Error("No signature");
-    event = await stripe.webhooks.constructEventAsync(body, sig, c.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err: any) {
-    // 署名エラーでもアプリは止まらないのでログだけ
-    console.error("Webhook Error:", err.message);
-    return c.text(`Webhook Error: ${err.message}`, 400);
-  }
-
-  try {
-    if (event.type === 'checkout.session.completed' || event.type === 'customer.subscription.updated') {
-      const session = event.data.object as any;
-      const customerId = session.customer;
-      if (customerId) {
-         const isActive = (session.status === 'active' || session.status === 'trialing');
-         await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE stripe_customer_id = ? OR email = ?")
-           .bind(isActive ? 1 : 0, customerId, customerId, session.customer_email || "").run();
-      }
-    }
-    if (event.type === 'customer.subscription.deleted') {
-      const session = event.data.object as any;
-      const customerId = session.customer;
-      if (customerId) {
-        await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?").bind(customerId).run();
-      }
-    }
-  } catch (e) { return c.text('DB Update Failed', 500); }
-
   return c.text('Received', 200);
 });
 
