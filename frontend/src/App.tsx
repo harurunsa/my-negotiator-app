@@ -331,7 +331,7 @@ function App() {
 
   const [style, setStyle] = useState<StyleCode>('auto');
   
-  // Menu Control
+  // ★ Menu Control
   const [showMenu, setShowMenu] = useState(false);
   
   const [customPersonas, setCustomPersonas] = useState<any[]>([]);
@@ -812,20 +812,44 @@ function App() {
 
   const renderSettings = () => (
     <div style={styles.pageContainer}>
-      <h2 style={{marginBottom:'20px'}}>{t.sub_title}</h2>
+      <h2 style={{marginBottom:'20px'}}>プランとサブスクリプション</h2>
+      
       <div style={styles.card}>
-        <p style={{color:'#888', fontSize:'0.9rem'}}>{t.sub_status}</p>
-        <h3 style={{fontSize:'1.5rem', margin:'10px 0'}}>
-          {user?.is_pro ? t.sub_pro : t.sub_free}
-        </h3>
+        <div style={{textAlign: 'left', marginBottom: '25px', padding: '0 10px'}}>
+          <div style={{display:'flex', justifyContent:'space-between', borderBottom:'1px solid #eee', paddingBottom:'10px', marginBottom:'10px'}}>
+            <span style={{fontWeight:'bold', color:'#666'}}>フリープラン</span>
+            <span>1日 5回まで</span>
+          </div>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+            <span style={{fontWeight:'bold', color:'#333'}}>Proプラン 👑</span>
+            <span style={{fontWeight:'bold', color:'#00C2FF'}}>無制限</span>
+          </div>
+          <div style={{fontSize: '0.8rem', color: '#999', marginTop: '5px', textAlign:'right'}}>
+            (※常識的な範囲内の上限あり)
+          </div>
+        </div>
+
+        <div style={{background: '#f5f7fa', padding: '15px', borderRadius: '12px', marginBottom: '20px'}}>
+          <div style={{fontSize: '0.9rem', color: '#666', marginBottom: '5px'}}>現在のステータス</div>
+          <div style={{fontSize: '1.4rem', fontWeight: 'bold'}}>
+            {user?.is_pro ? <span style={{color:'#4CAF50'}}>Pro Plan (Active)</span> : <span>Free Plan</span>}
+          </div>
+        </div>
+
         {user?.is_pro ? (
-          <div style={{color:'#4CAF50', fontWeight:'bold', marginBottom:'15px'}}>Active ✅</div>
+          <button onClick={handlePortal} style={styles.settingsBtn}>
+            契約内容の確認・変更 (Portal)
+          </button>
         ) : (
-          <div style={{color:'#FF9800', fontWeight:'bold', marginBottom:'15px'}}>Limit: 5/day</div>
+          <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
+            <button onClick={() => handleUpgrade('yearly')} style={styles.settingsBtn}>
+              Proにアップグレード (年額)
+            </button>
+            <button onClick={() => handleUpgrade('monthly')} style={{...styles.settingsBtn, background:'transparent', color:'#333', border:'1px solid #ddd'}}>
+              月額プランにする
+            </button>
+          </div>
         )}
-        <button onClick={handlePortal} style={styles.settingsBtn}>
-          {t.sub_manage_btn}
-        </button>
       </div>
       <button onClick={() => setCurrentView('chat')} style={styles.backBtn}>Back</button>
     </div>
@@ -967,7 +991,6 @@ function App() {
                        </button>
                      </div>
                      
-                     {/* カスタム人格の管理リスト */}
                      {customPersonas.length > 0 && (
                        <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
                          {customPersonas.map(p => (
@@ -1155,6 +1178,13 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   backBtn: {
     background: 'transparent', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer'
+  },
+
+  upgradeHeaderBtn: {
+    padding: '6px 12px', fontSize: '0.8rem', borderRadius: '20px', border: 'none',
+    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333',
+    cursor: 'pointer', fontWeight: '800', boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
+    display: 'flex', alignItems: 'center', gap: '4px'
   },
 
   landingContainer: { 
