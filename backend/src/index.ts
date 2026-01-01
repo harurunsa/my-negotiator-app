@@ -143,7 +143,7 @@ app.get('/auth/callback', async (c) => {
 
 // --- API Endpoints ---
 
-// ユーザー情報の取得 (画像復元 & スタイル復元用)
+// ユーザー情報の取得
 app.get('/api/user', async (c) => {
   const email = c.req.query('email');
   if (!email) return c.json({ error: "Email required" }, 400);
@@ -175,7 +175,8 @@ app.post('/api/inquiry', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// 手動確認用API (Webhookの代わり)
+// ★追加: 手動確認用API (Webhookの代わり)
+// フロントエンドから呼ばれると、Stripeに問い合わせてDBを更新する
 app.post('/api/verify-subscription', async (c) => {
   try {
     const { email } = await c.req.json();
@@ -188,28 +189,26 @@ app.post('/api/verify-subscription', async (c) => {
     }
     const customerId = customers.data[0].id;
 
-    // 2. その顧客のサブスクリプション状況を確認
+    // 2. その顧客の有効なサブスクリプションを確認
     const subscriptions = await stripe.subscriptions.list({
       customer: customerId,
       status: 'active',
       limit: 1
     });
 
-    // 3. 有効なサブスクがあればDBを更新
-    const isPro = subscriptions.data.length > 0 ? 1 : 0;
+    // 3. トライアル中も含めるか判定
+    let isPro = subscriptions.data.length > 0 ? 1 : 0;
     
-    let isTrialing = false;
     if (!isPro) {
         const trials = await stripe.subscriptions.list({ customer: customerId, status: 'trialing', limit: 1 });
-        if (trials.data.length > 0) isTrialing = true;
+        if (trials.data.length > 0) isPro = 1;
     }
 
-    const finalStatus = (isPro || isTrialing) ? 1 : 0;
-
+    // 4. DBを更新
     await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?")
-      .bind(finalStatus, customerId, email).run();
+      .bind(isPro, customerId, email).run();
 
-    return c.json({ success: true, is_pro: finalStatus });
+    return c.json({ success: true, is_pro: isPro });
 
   } catch(e: any) {
     return c.json({ error: e.message }, 500);
@@ -308,7 +307,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// AI Chat (物理アクション強制 & 口調維持 & スタイル保存)
+// AI Chat
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -332,7 +331,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- 人格決定ロジック ---
+    // --- 人格決定 ---
     let archetypeLabel = "Empathic Counselor";
     let archetypePrompt = ARCHETYPES['empathy'].prompt;
     let selectedKey = style;
@@ -355,7 +354,7 @@ app.post('/api/chat', async (c) => {
         archetypePrompt = ARCHETYPES[selectedKey].prompt;
     }
 
-    // --- タスク処理とプロンプト構築 ---
+    // --- タスクコンテキスト ---
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
@@ -365,35 +364,29 @@ app.post('/api/chat', async (c) => {
     
     let instructionBlock = "";
     
-    // --- アクションごとの指示生成 ---
     if (action === 'next') {
         let nextIndex = taskIndex + 1;
         if (nextIndex < currentTaskList.length) {
             const nextTask = currentTaskList[nextIndex];
             const completedTask = currentTaskList[taskIndex];
             
-            // ログ更新
             const updatedMemory = truncateContext((user.memory || "") + ` [Log]: User finished "${completedTask}".`);
             await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
             
             instructionBlock = `
-              [STATUS]: User clicked "Next".
-              [COMPLETED]: "${completedTask}"
-              [NEXT TASK]: "${nextTask}" (Step ${nextIndex + 1} of ${currentTaskList.length})
+              [STATE]: User completed task "${completedTask}".
+              [NEXT TASK]: "${nextTask}" (${nextIndex + 1}/${currentTaskList.length}).
               [INSTRUCTION]: 
-              1. **ROLEPLAY**: Speak as [Current Persona]. Praise the user.
-              2. **DIRECTIVE**: Tell them the next task is "${nextTask}".
-              3. **PROGRESS**: Mention "You are at step ${nextIndex + 1}/${currentTaskList.length}!".
-              [OUTPUT]: JSON "reply" only. No "new_task_list".
+              1. In [CURRENT PERSONA] tone, praise the user briefly.
+              2. Explicitly state the [NEXT TASK].
+              3. Encourage them to do it now.
+              [OUTPUT]: JSON "reply" only.
             `;
         } else {
-            // 全完了
             await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
             instructionBlock = `
-              [STATUS]: User clicked "Next". All tasks done.
-              [INSTRUCTION]: 
-              1. **ROLEPLAY**: Speak as [Current Persona]. Celebrate enthusiastically!
-              2. Ask what they want to do next.
+              [STATE]: All tasks completed!
+              [INSTRUCTION]: Celebrate enthusiastically in [CURRENT PERSONA] tone. Ask what they want to do next.
               [OUTPUT]: JSON "reply" only.
             `;
         }
@@ -403,32 +396,27 @@ app.post('/api/chat', async (c) => {
         const currentTask = currentTaskList[taskIndex] || "Current Task";
         
         instructionBlock = `
-          [STATUS]: User clicked "Impossible/Retry".
-          [CURRENT TASK]: "${currentTask}"
-          [INSTRUCTION]: Break this task down into 2-3 **PHYSICAL ACTIONS**.
-          [FORBIDDEN VERBS]: Think, Decide, Check, Look, Prepare, Assess.
-          [REQUIRED VERBS]: Stand up, Touch, Hold, Open, Throw, Walk.
-          [EXAMPLE]: "Clean desk" -> 1. "Stand up from chair." 2. "Pick up one piece of trash." 3. "Throw it in bin."
+          [STATE]: User is stuck on "${currentTask}".
+          [INSTRUCTION]: Break down "${currentTask}" into 2-3 tiny, PHYSICAL ACTIONS.
+          [BANNED VERBS]: Think, Decide, Check, Look, Prepare.
+          [REQUIRED VERBS]: Stand up, Touch, Hold, Open, Throw.
           [OUTPUT]: JSON with "new_task_list" and "reply".
         `;
     } 
     
-    else { // normal
+    else { 
         const currentTaskText = currentTaskList[taskIndex] || "None";
-        const progressInfo = currentTaskList.length > 0 ? `(Step ${taskIndex + 1} of ${currentTaskList.length}: "${currentTaskText}")` : "(No active plan)";
+        const progressInfo = currentTaskList.length > 0 ? `(Step ${taskIndex + 1} of ${currentTaskList.length}: "${currentTaskText}")` : "(No plan yet)";
 
         instructionBlock = `
-          [STATUS]: User input: "${message}".
-          [CURRENT PLAN]: ${progressInfo}.
+          [STATE]: User input: "${message}". Current Plan: ${progressInfo}.
           [INSTRUCTION]:
-          1. **IF NEW GOAL** (e.g. "clean room", "study"):
+          1. IF user wants to start a goal (e.g. "clean room", "study"):
              - Create a "new_task_list" with 3-5 steps.
-             - **CRITICAL RULE**: Steps MUST be **PHYSICAL ACTIONS** (e.g. "Get trash bag", "Pick up bottles").
-             - **DO NOT** use mental steps (e.g. "Check mess", "Decide where to start").
-             - **FORGET**: Ignore previous finished tasks in memory if this is a new goal.
-          2. **IF CHAT**:
-             - Reply in [Current Persona] tone.
-          3. **IF PROGRESS REPORT**:
+             - **CRITICAL**: Steps MUST be PHYSICAL ACTIONS (e.g. "Get trash bag", "Pick up bottles"), NOT mental ones.
+          2. IF just chatting:
+             - Reply in [CURRENT PERSONA] tone.
+          3. IF user reports progress:
              - Praise and guide to next step.
           [OUTPUT]: JSON. If new plan, include "new_task_list". Always include "reply".
         `;
@@ -448,7 +436,7 @@ app.post('/api/chat', async (c) => {
       ${instructionBlock}
       
       [ABSOLUTE RULES]:
-      1. **ALWAYS** speak in the [Current Persona] tone. Do not revert to a robotic assistant.
+      1. **ALWAYS** speak in the [CURRENT PERSONA] tone. Never break character.
       2. **ACTION BIAS**: Use PHYSICAL VERBS (Stand, Pick up). Avoid cognitive verbs (Think).
       3. Keep responses concise.
 
@@ -465,7 +453,7 @@ app.post('/api/chat', async (c) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent }] }], generationConfig: { response_mime_type: "application/json" } })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent + "\n\n" + requestText }] }], generationConfig: { response_mime_type: "application/json" } })
     });
 
     const data: any = await response.json();
@@ -474,7 +462,7 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "通信エラーが発生しました。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
+      result = { reply: lang === 'ja' ? "準備はいい？次へ行こう！" : "Ready? Let's go!", timer_seconds: 60, used_archetype: selectedKey };
     }
     
     if (!result.reply || result.reply.trim() === "") {
@@ -534,7 +522,6 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e: any) { return c.json({ error: "DB Error", details: e.message }, 500); }
 });
 
-// Stripe Checkout
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
@@ -543,6 +530,7 @@ app.post('/api/checkout', async (c) => {
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     let customerId = user?.stripe_customer_id;
 
+    // 顧客IDの取得・作成関数
     const createNewCustomer = async () => {
       const customer = await stripe.customers.create({ email });
       await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(customer.id, email).run();
@@ -564,6 +552,7 @@ app.post('/api/checkout', async (c) => {
         });
         if (session.url) return c.json({ url: session.url });
     } catch (err: any) {
+        // IDが無効な場合（開発環境でリセットなど）、作り直して再試行
         if (err.code === 'resource_missing') {
             customerId = await createNewCustomer();
             const session = await stripe.checkout.sessions.create({
@@ -599,6 +588,7 @@ app.post('/api/portal', async (c) => {
   } catch (e: any) { return c.json({ error: e.message }, 500); }
 });
 
+// Webhook (一応残す)
 app.post('/api/webhook', async (c) => {
   const sig = c.req.header('stripe-signature');
   const body = await c.req.text();
@@ -609,6 +599,8 @@ app.post('/api/webhook', async (c) => {
     if (!sig) throw new Error("No signature");
     event = await stripe.webhooks.constructEventAsync(body, sig, c.env.STRIPE_WEBHOOK_SECRET);
   } catch (err: any) {
+    // 署名エラーでもアプリは止まらないのでログだけ
+    console.error("Webhook Error:", err.message);
     return c.text(`Webhook Error: ${err.message}`, 400);
   }
 
