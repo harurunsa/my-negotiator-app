@@ -100,22 +100,6 @@ function truncateContext(text: string): string {
   return "..." + text.substring(text.length - MAX_CONTEXT_CHARS);
 }
 
-async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
-  const res = await fetch(`https://api.lemonsqueezy.com/v1/${path}`, {
-    method,
-    headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/vnd.api+json', 'Content-Type': 'application/vnd.api+json' },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch (e) { throw new Error(`Lemon Squeezy Non-JSON: ${text.substring(0, 100)}`); }
-  if (!res.ok || data.errors) {
-    const errorDetail = data.errors ? data.errors.map((e: any) => `${e.title}: ${e.detail}`).join(', ') : "Unknown API Error";
-    throw new Error(`Lemon Squeezy Failed: ${errorDetail}`);
-  }
-  return data;
-}
-
 // --- Auth Routes ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
@@ -159,6 +143,7 @@ app.get('/auth/callback', async (c) => {
 
 // --- API Endpoints ---
 
+// ユーザー情報の取得 (画像復元 & スタイル復元用)
 app.get('/api/user', async (c) => {
   const email = c.req.query('email');
   if (!email) return c.json({ error: "Email required" }, 400);
@@ -188,6 +173,47 @@ app.post('/api/inquiry', async (c) => {
     await c.env.DB.prepare("INSERT INTO inquiries (id, email, message, created_at) VALUES (?, ?, ?, ?)").bind(crypto.randomUUID(), email, message, Date.now()).run();
     return c.json({ success: true });
   } catch(e: any) { return c.json({ error: e.message }, 500); }
+});
+
+// 手動確認用API (Webhookの代わり)
+app.post('/api/verify-subscription', async (c) => {
+  try {
+    const { email } = await c.req.json();
+    const stripe = new Stripe(c.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+
+    // 1. Stripe上で顧客を検索
+    const customers = await stripe.customers.list({ email: email, limit: 1 });
+    if (customers.data.length === 0) {
+      return c.json({ is_pro: 0, message: "No customer found" });
+    }
+    const customerId = customers.data[0].id;
+
+    // 2. その顧客のサブスクリプション状況を確認
+    const subscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: 'active',
+      limit: 1
+    });
+
+    // 3. 有効なサブスクがあればDBを更新
+    const isPro = subscriptions.data.length > 0 ? 1 : 0;
+    
+    let isTrialing = false;
+    if (!isPro) {
+        const trials = await stripe.subscriptions.list({ customer: customerId, status: 'trialing', limit: 1 });
+        if (trials.data.length > 0) isTrialing = true;
+    }
+
+    const finalStatus = (isPro || isTrialing) ? 1 : 0;
+
+    await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?")
+      .bind(finalStatus, customerId, email).run();
+
+    return c.json({ success: true, is_pro: finalStatus });
+
+  } catch(e: any) {
+    return c.json({ error: e.message }, 500);
+  }
 });
 
 app.post('/api/persona/manage', async (c) => {
@@ -282,7 +308,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// AI Chat
+// AI Chat (物理アクション強制 & 口調維持 & スタイル保存)
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -339,57 +365,70 @@ app.post('/api/chat', async (c) => {
     
     let instructionBlock = "";
     
+    // --- アクションごとの指示生成 ---
     if (action === 'next') {
         let nextIndex = taskIndex + 1;
         if (nextIndex < currentTaskList.length) {
             const nextTask = currentTaskList[nextIndex];
             const completedTask = currentTaskList[taskIndex];
             
+            // ログ更新
             const updatedMemory = truncateContext((user.memory || "") + ` [Log]: User finished "${completedTask}".`);
             await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
             
             instructionBlock = `
-              [STATE]: User completed task "${completedTask}".
-              [NEXT TASK]: "${nextTask}" (${nextIndex + 1}/${currentTaskList.length}).
+              [STATUS]: User clicked "Next".
+              [COMPLETED]: "${completedTask}"
+              [NEXT TASK]: "${nextTask}" (Step ${nextIndex + 1} of ${currentTaskList.length})
               [INSTRUCTION]: 
-              1. In [CURRENT PERSONA] tone, praise the user briefly.
-              2. Explicitly state the [NEXT TASK].
-              3. Encourage them to do it now.
-              [OUTPUT]: JSON "reply" only.
+              1. **ROLEPLAY**: Speak as [Current Persona]. Praise the user.
+              2. **DIRECTIVE**: Tell them the next task is "${nextTask}".
+              3. **PROGRESS**: Mention "You are at step ${nextIndex + 1}/${currentTaskList.length}!".
+              [OUTPUT]: JSON "reply" only. No "new_task_list".
             `;
         } else {
+            // 全完了
             await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
             instructionBlock = `
-              [STATE]: All tasks completed!
-              [INSTRUCTION]: Celebrate enthusiastically in [CURRENT PERSONA] tone. Ask what they want to do next.
+              [STATUS]: User clicked "Next". All tasks done.
+              [INSTRUCTION]: 
+              1. **ROLEPLAY**: Speak as [Current Persona]. Celebrate enthusiastically!
+              2. Ask what they want to do next.
               [OUTPUT]: JSON "reply" only.
             `;
         }
     } 
+    
     else if (action === 'retry') {
         const currentTask = currentTaskList[taskIndex] || "Current Task";
         
         instructionBlock = `
-          [STATE]: User is stuck on "${currentTask}".
-          [INSTRUCTION]: Break down "${currentTask}" into 2-3 tiny, PHYSICAL ACTIONS.
-          [BANNED VERBS]: Think, Decide, Check, Look, Prepare.
-          [REQUIRED VERBS]: Stand up, Touch, Hold, Open, Throw.
+          [STATUS]: User clicked "Impossible/Retry".
+          [CURRENT TASK]: "${currentTask}"
+          [INSTRUCTION]: Break this task down into 2-3 **PHYSICAL ACTIONS**.
+          [FORBIDDEN VERBS]: Think, Decide, Check, Look, Prepare, Assess.
+          [REQUIRED VERBS]: Stand up, Touch, Hold, Open, Throw, Walk.
+          [EXAMPLE]: "Clean desk" -> 1. "Stand up from chair." 2. "Pick up one piece of trash." 3. "Throw it in bin."
           [OUTPUT]: JSON with "new_task_list" and "reply".
         `;
     } 
-    else { 
+    
+    else { // normal
         const currentTaskText = currentTaskList[taskIndex] || "None";
-        const progressInfo = currentTaskList.length > 0 ? `(Step ${taskIndex + 1} of ${currentTaskList.length}: "${currentTaskText}")` : "(No plan yet)";
+        const progressInfo = currentTaskList.length > 0 ? `(Step ${taskIndex + 1} of ${currentTaskList.length}: "${currentTaskText}")` : "(No active plan)";
 
         instructionBlock = `
-          [STATE]: User input: "${message}". Current Plan: ${progressInfo}.
+          [STATUS]: User input: "${message}".
+          [CURRENT PLAN]: ${progressInfo}.
           [INSTRUCTION]:
-          1. IF user wants to start a goal (e.g. "clean room", "study"):
+          1. **IF NEW GOAL** (e.g. "clean room", "study"):
              - Create a "new_task_list" with 3-5 steps.
-             - **CRITICAL**: Steps MUST be PHYSICAL ACTIONS (e.g. "Get trash bag", "Pick up bottles"), NOT mental ones.
-          2. IF just chatting:
-             - Reply in [CURRENT PERSONA] tone.
-          3. IF user reports progress:
+             - **CRITICAL RULE**: Steps MUST be **PHYSICAL ACTIONS** (e.g. "Get trash bag", "Pick up bottles").
+             - **DO NOT** use mental steps (e.g. "Check mess", "Decide where to start").
+             - **FORGET**: Ignore previous finished tasks in memory if this is a new goal.
+          2. **IF CHAT**:
+             - Reply in [Current Persona] tone.
+          3. **IF PROGRESS REPORT**:
              - Praise and guide to next step.
           [OUTPUT]: JSON. If new plan, include "new_task_list". Always include "reply".
         `;
@@ -409,7 +448,7 @@ app.post('/api/chat', async (c) => {
       ${instructionBlock}
       
       [ABSOLUTE RULES]:
-      1. **ALWAYS** speak in the [CURRENT PERSONA] tone. Never break character.
+      1. **ALWAYS** speak in the [Current Persona] tone. Do not revert to a robotic assistant.
       2. **ACTION BIAS**: Use PHYSICAL VERBS (Stand, Pick up). Avoid cognitive verbs (Think).
       3. Keep responses concise.
 
@@ -435,7 +474,7 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "準備はいい？次へ行こう！" : "Ready? Let's go!", timer_seconds: 60, used_archetype: selectedKey };
+      result = { reply: lang === 'ja' ? "通信エラーが発生しました。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
     }
     
     if (!result.reply || result.reply.trim() === "") {
@@ -495,7 +534,7 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e: any) { return c.json({ error: "DB Error", details: e.message }, 500); }
 });
 
-// ★ Stripe Checkout (エラー修正版)
+// Stripe Checkout
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
@@ -504,21 +543,17 @@ app.post('/api/checkout', async (c) => {
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     let customerId = user?.stripe_customer_id;
 
-    // 顧客作成関数
     const createNewCustomer = async () => {
       const customer = await stripe.customers.create({ email });
       await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(customer.id, email).run();
       return customer.id;
     };
 
-    if (!customerId) {
-      customerId = await createNewCustomer();
-    }
+    if (!customerId) customerId = await createNewCustomer();
 
     const priceId = plan === 'monthly' ? c.env.STRIPE_PRICE_ID_MONTHLY : c.env.STRIPE_PRICE_ID_YEARLY;
 
     try {
-        // セッション作成を試みる
         const session = await stripe.checkout.sessions.create({
           customer: customerId,
           payment_method_types: ['card'],
@@ -529,9 +564,7 @@ app.post('/api/checkout', async (c) => {
         });
         if (session.url) return c.json({ url: session.url });
     } catch (err: any) {
-        // ★ 顧客IDが無効(削除済みなど)の場合、再作成してリトライするロジック
-        if (err.code === 'resource_missing' && err.param === 'customer') {
-            console.log("Customer missing, recreating...");
+        if (err.code === 'resource_missing') {
             customerId = await createNewCustomer();
             const session = await stripe.checkout.sessions.create({
                 customer: customerId,
@@ -542,13 +575,9 @@ app.post('/api/checkout', async (c) => {
                 cancel_url: `${c.env.FRONTEND_URL}/?payment=cancelled`,
             });
             if (session.url) return c.json({ url: session.url });
-        } else {
-            throw err; // それ以外のエラーはそのまま投げる
-        }
+        } else { throw err; }
     }
-    
-    throw new Error("No URL returned from Stripe");
-
+    throw new Error("No URL");
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
