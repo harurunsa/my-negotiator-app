@@ -331,7 +331,7 @@ function App() {
 
   const [style, setStyle] = useState<StyleCode>('auto');
   
-  // ★ Menu Control
+  // Menu Control
   const [showMenu, setShowMenu] = useState(false);
   
   const [customPersonas, setCustomPersonas] = useState<any[]>([]);
@@ -387,7 +387,7 @@ function App() {
 
       fetchUser();
 
-      // ★決済完了直後なら確認
+      // ★決済完了直後なら能動的に確認APIを叩く
       const params = new URLSearchParams(window.location.search);
       if (params.get('payment') === 'success') {
         window.history.replaceState({}, '', '/');
@@ -967,6 +967,7 @@ function App() {
                        </button>
                      </div>
                      
+                     {/* カスタム人格の管理リスト */}
                      {customPersonas.length > 0 && (
                        <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
                          {customPersonas.map(p => (
