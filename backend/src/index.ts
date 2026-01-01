@@ -23,6 +23,7 @@ const app = new Hono<{ Bindings: Bindings }>()
 
 const MAX_CUSTOM_PERSONAS = 3; 
 
+// CORS制限
 app.use('/*', async (c, next) => {
   const corsMiddleware = cors({
     origin: c.env.FRONTEND_URL || '*',
@@ -36,9 +37,9 @@ app.use('/*', async (c, next) => {
 });
 
 const DAILY_LIMIT = 5;
-const MAX_CONTEXT_CHARS = 2000;
+const MAX_CONTEXT_CHARS = 2500; // コンテキストをさらに拡張
 
-// (PPP設定等は省略なしで維持)
+// --- PPP設定 ---
 const PPP_DISCOUNTS: { [key: string]: string } = {
   'IN': 'PPP50', 'BR': 'PPP50', 'ID': 'PPP50', 'PH': 'PPP50', 
   'VN': 'PPP50', 'EG': 'PPP50', 'NG': 'PPP50', 'BD': 'PPP50', 'PK': 'PPP50',
@@ -50,7 +51,7 @@ const COUNTRY_TO_LANG: { [key: string]: string } = {
   'JP': 'ja', 'BR': 'pt', 'PT': 'pt', 'ES': 'es', 'MX': 'es', 'ID': 'id', 'US': 'en'
 };
 
-// 人格定義
+// 人格（アーキタイプ）定義
 const ARCHETYPES: any = {
   empathy: {
     label: "The Empathic Counselor",
@@ -84,7 +85,7 @@ const MESSAGES: any = {
   id: { limit_reached: "Batas tercapai." }
 };
 
-// Helper Functions
+// --- Helper Functions ---
 function extractJson(text: string): string {
   let cleaned = text.replace(/```json\s*|\s*```/g, '');
   const start = cleaned.indexOf('{');
@@ -115,7 +116,7 @@ async function callLemonSqueezy(path: string, method: string, apiKey: string, bo
   return data;
 }
 
-// Auth Routes (変更なし)
+// --- Auth Routes ---
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -156,7 +157,8 @@ app.get('/auth/callback', async (c) => {
   } catch (e: any) { return c.text(`Auth Error: ${e.message}`, 500) }
 })
 
-// API Endpoints
+// --- API Endpoints ---
+
 app.get('/api/user', async (c) => {
   const email = c.req.query('email');
   if (!email) return c.json({ error: "Email required" }, 400);
@@ -280,7 +282,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// ★ AI Chat (改良完全版)
+// ★ AI Chat (修正版: 物理アクション強制 & 口調維持)
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -300,7 +302,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- 人格決定ロジック ---
+    // --- 人格決定 ---
     let archetypeLabel = "Empathic Counselor";
     let archetypePrompt = ARCHETYPES['empathy'].prompt;
     let selectedKey = style;
@@ -318,26 +320,13 @@ app.post('/api/chat', async (c) => {
             }
         }
     } else {
-        const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
-        const epsilon = 0.2; 
-        let bestKey: ArchetypeKey = 'empathy';
-        let bestRate = -1;
-        Object.keys(ARCHETYPES).forEach((key) => {
-            const k = key as ArchetypeKey;
-            const stat = styleStats[k] || { wins: 0, total: 0 };
-            const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
-            if (rate > bestRate) { bestRate = rate; bestKey = k; }
-        });
-        if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
-            const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
-            selectedKey = keys[Math.floor(Math.random() * keys.length)];
-        } else { selectedKey = bestKey; }
-        
+        // Auto: 簡易ロジック
+        selectedKey = 'empathy'; 
         archetypeLabel = ARCHETYPES[selectedKey].label;
         archetypePrompt = ARCHETYPES[selectedKey].prompt;
     }
 
-    // --- タスク処理とプロンプト構築 ---
+    // --- タスクコンテキスト ---
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
@@ -345,38 +334,36 @@ app.post('/api/chat', async (c) => {
     const userMemory = truncateContext(user.memory || "");
     const safePrevContext = truncateContext(prev_context || "");
     
-    let specialInstruction = "";
-    let systemTaskInfo = "";
-
-    // ★ Next アクション: AIが喋るように変更 (システム定型文廃止)
+    let instructionBlock = "";
+    
+    // アクション別のプロンプト構成
     if (action === 'next') {
         let nextIndex = taskIndex + 1;
         if (nextIndex < currentTaskList.length) {
-            const nextTask = currentTaskList[nextIndex];
             const completedTask = currentTaskList[taskIndex];
+            const nextTask = currentTaskList[nextIndex];
             
             // DB更新
-            const updatedMemory = truncateContext((user.memory || "") + ` [Log]: User completed "${completedTask}".`);
+            const updatedMemory = truncateContext((user.memory || "") + ` [Log]: User finished "${completedTask}".`);
             await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
             
-            // AIへの指示: 完了を祝い、次のタスク（進捗付き）をキャラ口調で伝える
-            specialInstruction = `
-              [SITUATION]: User has COMPLETED the task: "${completedTask}".
-              [NEXT TASK]: "${nextTask}".
-              [PROGRESS]: ${nextIndex + 1} / ${currentTaskList.length}.
+            // 次の指示
+            instructionBlock = `
+              [STATE]: User completed task "${completedTask}".
+              [NEXT TASK]: "${nextTask}" (${nextIndex + 1}/${currentTaskList.length}).
               [INSTRUCTION]: 
-              1. Praise the user for finishing the task in [CURRENT PERSONA]'s tone. 
-              2. Explicitly state the [NEXT TASK] and the [PROGRESS].
-              3. Encourage them to start the next task immediately.
-              [FORMAT]: Return "reply" ONLY. Do NOT generate a new list.
+              1. In [CURRENT PERSONA] tone, praise the user briefly.
+              2. Clearly tell them the [NEXT TASK].
+              3. Encourage them to do it now.
+              [OUTPUT]: JSON "reply" only.
             `;
         } else {
-            // 全完了
+            // 完了
             await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
-            specialInstruction = `
-              [SITUATION]: All tasks are completed!
-              [INSTRUCTION]: Congratulate the user enthusiastically in [CURRENT PERSONA]'s tone. Ask what they want to do next.
-              [FORMAT]: Return "reply" ONLY.
+            instructionBlock = `
+              [STATE]: All tasks completed!
+              [INSTRUCTION]: Celebrate enthusiastically in [CURRENT PERSONA] tone. Ask what they want to do next.
+              [OUTPUT]: JSON "reply" only.
             `;
         }
     } 
@@ -385,67 +372,67 @@ app.post('/api/chat', async (c) => {
         const currentTask = currentTaskList[taskIndex] || "Current Task";
         const remainingTasks = currentTaskList.slice(taskIndex + 1);
         
-        specialInstruction = `
-          [SITUATION]: The user feels the task "${currentTask}" is impossible/too hard.
-          [INSTRUCTION]: Break down "${currentTask}" into 2-3 tiny PHYSICAL ACTION micro-steps.
-          [FORBIDDEN]: **DO NOT USE** vague verbs like "Check", "Look", "Think", "Decide", "Plan".
-          [REQUIRED]: Use ONLY physical verbs like "Stand up", "Touch", "Pick up", "Throw", "Open".
-          [OUTPUT]: Generate "new_task_list". Also return a "reply" encouraging them.
+        instructionBlock = `
+          [STATE]: User is stuck on "${currentTask}".
+          [INSTRUCTION]: Break down "${currentTask}" into 2-3 tiny, PHYSICAL ACTIONS.
+          [BANNED VERBS]: Think, Decide, Check, Look, Prepare.
+          [REQUIRED VERBS]: Stand up, Touch, Hold, Open, Throw.
+          [EXAMPLE]: "Clean desk" -> 1. "Stand up." 2. "Pick up one pen." 3. "Put pen in drawer."
+          [OUTPUT]: JSON with "new_task_list" and "reply".
         `;
-        systemTaskInfo = `Remaining tasks to keep: ${JSON.stringify(remainingTasks)}`;
-    }
+    } 
     
-    else { // action === 'normal'
-        // 通常会話 or 新規目標設定
-        specialInstruction = `
-          [SITUATION]: User input received.
-          [INSTRUCTION]: 
-          1. IF user states a GOAL (e.g. "Clean room"):
-             - Create a step-by-step "new_task_list".
-             - **CRITICAL**: Steps must be PHYSICAL ACTIONS (e.g. "Get trash bag", "Pick up bottles"). 
-             - **FORBIDDEN**: "Look at room", "Decide where to start". These are too hard for ADHD.
+    else { // normal
+        // 現在のタスク情報
+        const currentTaskText = currentTaskList[taskIndex] || "None";
+        const progressInfo = currentTaskList.length > 0 ? `(Step ${taskIndex + 1} of ${currentTaskList.length}: "${currentTaskText}")` : "(No plan yet)";
+
+        instructionBlock = `
+          [STATE]: User input: "${message}". Current Plan: ${progressInfo}.
+          [INSTRUCTION]:
+          1. IF the user wants to start a goal (e.g. "clean room", "study"):
+             - Create a "new_task_list" with 3-5 steps.
+             - **CRITICAL**: Steps MUST be PHYSICAL ACTIONS (e.g. "Get trash bag"), NOT mental ones (e.g. "Check mess").
           2. IF just chatting:
-             - Reply in [CURRENT PERSONA] tone (return "reply" only).
+             - Reply in [CURRENT PERSONA] tone. No task list.
+          3. IF user reports progress on current task:
+             - Praise and guide to next step.
+          [OUTPUT]: JSON. If new plan, include "new_task_list". Always include "reply".
         `;
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
     
     const systemInstructionContent = `
-      You are an Executive Function Augmentation AI.
+      You are an Executive Function Support AI.
       [Language]: Reply in **${targetLangName}**.
-      [User Memory]: ${userMemory}
-      [Context]: ${safePrevContext}
-      [GOAL]: ${current_goal || "Infer from user input"}
+      [Current Persona]: **${archetypeLabel}**
+      [Persona Instructions]: ${archetypePrompt}
       
-      [CURRENT PERSONA]: **${archetypeLabel}**
-      [PERSONA INSTRUCTION]: ${archetypePrompt}
+      [User Context]: ${safePrevContext}
+      [Memory]: ${userMemory}
       
-      [CORE RULES]:
-      1. **ALWAYS** speak in the [CURRENT PERSONA] tone. Never break character.
-      2. **ACTION BIAS**: When creating tasks, use CONCRETE PHYSICAL ACTIONS. 
-         - BAD: "Assess the mess."
-         - GOOD: "Pick up one piece of trash."
+      ${instructionBlock}
       
-      ${specialInstruction}
-      ${systemTaskInfo}
+      [ABSOLUTE RULES]:
+      1. Stay in character (Persona) at all times.
+      2. When creating tasks, use **PHYSICAL VERBS** (Stand, Pick up, Open). Avoid cognitive verbs (Think, Plan).
+      3. Keep responses concise and encouraging.
 
-      [OUTPUT FORMAT]: JSON ONLY.
+      [OUTPUT FORMAT]: JSON ONLY
       {
-        "reply": "Conversational response in Persona Tone",
-        "new_task_list": ["Action 1", "Action 2"...] (Optional),
+        "reply": "Your conversational response here.",
+        "new_task_list": ["Step 1", "Step 2"] (Optional),
         "timer_seconds": 180,
-        "detected_goal": "Goal String",
+        "detected_goal": "Goal name (e.g. Clean Room)",
         "used_archetype": "${selectedKey}"
       }
     `;
 
-    const requestText = `User: ${message || (action === 'next' ? "I finished the task." : "Help")}`;
-    
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent + "\n\n" + requestText }] }], generationConfig: { response_mime_type: "application/json" } })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent }] }], generationConfig: { response_mime_type: "application/json" } })
     });
 
     const data: any = await response.json();
@@ -454,26 +441,27 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "通信エラー。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
+      result = { reply: lang === 'ja' ? "エラーです。もう一度試して。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
     }
     
+    // ★ フェイルセーフ: 空白回答防止
+    if (!result.reply || result.reply.trim() === "") {
+        result.reply = lang === 'ja' ? "準備はいい？次へ行こう！" : "Ready? Let's go!";
+    }
     if (!result.used_archetype) result.used_archetype = selectedKey;
 
-    // タスクリスト更新処理
+    // タスク更新処理
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
       if (action === 'retry') {
-          // Retryは残りのタスクを後ろにつける
           const remaining = currentTaskList.slice(taskIndex + 1);
           finalTaskList = [...result.new_task_list, ...remaining];
       } else {
-          // Normal (新規目標) は完全に上書き
           finalTaskList = result.new_task_list;
       }
       await c.env.DB.prepare("UPDATE users SET task_list = ?, current_task_index = 0 WHERE email = ?").bind(JSON.stringify(finalTaskList), email).run();
     }
 
-    // メモリ更新
     if (result.reply) {
       c.executionCtx.waitUntil((async () => {
         const newMem = truncateContext(userMemory + ` U:${message} A:${result.reply}`);
