@@ -35,17 +35,16 @@ const TRANSLATIONS = {
     menu_chat: "チャット",
     menu_sub: "サブスク",
     menu_contact: "要望・報告",
-    menu_upgrade: "👑 Proにアップグレード",
-    
-    // サブスク画面用
     sub_title: "プランとサブスクリプション",
-    sub_free_title: "フリープラン",
-    sub_free_limit: "1日 5回まで",
-    sub_pro_title: "Proプラン 👑",
-    sub_pro_limit: "無制限",
-    sub_pro_note: "(※常識的な範囲内の上限あり)",
-    sub_portal_btn: "サブスクリプション管理 (Portal)",
-    sub_portal_desc: "プランの変更・解約・カード情報の更新は、Stripe管理画面(Portal)にて安全に行われます。",
+    
+    // ★追加: サブスク画面用
+    plan_free: "フリープラン",
+    plan_free_limit: "1日 5回まで",
+    plan_pro: "Proプラン 👑",
+    plan_pro_limit: "無制限",
+    plan_pro_note: "(※常識的な範囲内の上限あり)",
+    portal_btn: "サブスクリプション管理 (Portal)",
+    portal_desc: "※プランの変更・解約・カード情報の更新は、Stripe管理画面(Portal)にて安全に行われます。",
 
     contact_title: "お問い合わせ・フィードバック",
     contact_desc: "不具合の報告や、機能のご要望はこちらからお願いします。",
@@ -103,16 +102,16 @@ const TRANSLATIONS = {
     menu_chat: "Chat",
     menu_sub: "Plan",
     menu_contact: "Contact",
-    menu_upgrade: "👑 Upgrade to Pro",
-
     sub_title: "Plans & Subscription",
-    sub_free_title: "Free Plan",
-    sub_free_limit: "5 chats / day",
-    sub_pro_title: "Pro Plan 👑",
-    sub_pro_limit: "Unlimited",
-    sub_pro_note: "(*Subject to fair use policy)",
-    sub_portal_btn: "Manage Subscription (Portal)",
-    sub_portal_desc: "Change plans, cancel, or update card info securely via the Stripe Portal.",
+    
+    // ★Added for Subscription Page
+    plan_free: "Free Plan",
+    plan_free_limit: "5 chats / day",
+    plan_pro: "Pro Plan 👑",
+    plan_pro_limit: "Unlimited",
+    plan_pro_note: "(*Subject to fair use policy)",
+    portal_btn: "Manage Subscription (Portal)",
+    portal_desc: "*Plan changes, cancellations, and card updates are securely handled in the Stripe Portal.",
 
     contact_title: "Feedback & Inquiry",
     contact_desc: "Please let us know your thoughts or report bugs.",
@@ -170,16 +169,16 @@ const TRANSLATIONS = {
     menu_chat: "Chat",
     menu_sub: "Plano",
     menu_contact: "Contato",
-    menu_upgrade: "👑 Upgrade para Pro",
-
     sub_title: "Planos e Assinatura",
-    sub_free_title: "Plano Grátis",
-    sub_free_limit: "5 chats / dia",
-    sub_pro_title: "Plano Pro 👑",
-    sub_pro_limit: "Ilimitado",
-    sub_pro_note: "(*Sujeito a política de uso justo)",
-    sub_portal_btn: "Gerenciar Assinatura (Portal)",
-    sub_portal_desc: "Alterar planos, cancelar ou atualizar cartão via Stripe Portal.",
+    
+    // ★Adicionado
+    plan_free: "Plano Grátis",
+    plan_free_limit: "5 chats / dia",
+    plan_pro: "Plano Pro 👑",
+    plan_pro_limit: "Ilimitado",
+    plan_pro_note: "(*Sujeito à política de uso justo)",
+    portal_btn: "Gerenciar Assinatura (Portal)",
+    portal_desc: "*Alterações de plano, cancelamentos e atualizações de cartão são feitos com segurança no Portal Stripe.",
 
     contact_title: "Feedback",
     contact_desc: "Envie seus comentários.",
@@ -236,16 +235,16 @@ const TRANSLATIONS = {
     menu_chat: "Chat",
     menu_sub: "Plan",
     menu_contact: "Contacto",
-    menu_upgrade: "👑 Actualizar a Pro",
-
     sub_title: "Planes y Suscripción",
-    sub_free_title: "Plan Gratis",
-    sub_free_limit: "5 chats / día",
-    sub_pro_title: "Plan Pro 👑",
-    sub_pro_limit: "Ilimitado",
-    sub_pro_note: "(*Sujeto a política de uso justo)",
-    sub_portal_btn: "Gestionar Suscripción (Portal)",
-    sub_portal_desc: "Cambiar planes, cancelar o actualizar tarjeta vía Stripe Portal.",
+    
+    // ★Añadido
+    plan_free: "Plan Gratis",
+    plan_free_limit: "5 chats / día",
+    plan_pro: "Plan Pro 👑",
+    plan_pro_limit: "Ilimitado",
+    plan_pro_note: "(*Sujeto a política de uso justo)",
+    portal_btn: "Gestionar Suscripción (Portal)",
+    portal_desc: "*Cambios de plan, cancelaciones y actualizaciones de tarjeta se realizan de forma segura en el Portal de Stripe.",
 
     contact_title: "Feedback",
     contact_desc: "Envíanos tus comentarios.",
@@ -302,16 +301,16 @@ const TRANSLATIONS = {
     menu_chat: "Chat",
     menu_sub: "Langganan",
     menu_contact: "Kontak",
-    menu_upgrade: "👑 Upgrade ke Pro",
-
     sub_title: "Paket & Langganan",
-    sub_free_title: "Paket Gratis",
-    sub_free_limit: "5 obrolan / hari",
-    sub_pro_title: "Paket Pro 👑",
-    sub_pro_limit: "Tak Terbatas",
-    sub_pro_note: "(*Tunduk pada kebijakan penggunaan wajar)",
-    sub_portal_btn: "Kelola Langganan (Portal)",
-    sub_portal_desc: "Ubah paket, batalkan, atau perbarui info kartu via Stripe Portal.",
+    
+    // ★Ditambahkan
+    plan_free: "Paket Gratis",
+    plan_free_limit: "5 chat / hari",
+    plan_pro: "Paket Pro 👑",
+    plan_pro_limit: "Tak Terbatas",
+    plan_pro_note: "(*Tunduk pada kebijakan penggunaan wajar)",
+    portal_btn: "Kelola Langganan (Portal)",
+    portal_desc: "*Perubahan paket, pembatalan, dan pembaruan kartu dilakukan dengan aman di Portal Stripe.",
 
     contact_title: "Umpan Balik",
     contact_desc: "Kirimkan masukan Anda.",
@@ -362,7 +361,6 @@ function App() {
 
   const [style, setStyle] = useState<StyleCode>('auto');
   
-  // Menu Control
   const [showMenu, setShowMenu] = useState(false);
   
   const [customPersonas, setCustomPersonas] = useState<any[]>([]);
@@ -401,7 +399,6 @@ function App() {
     }
   }, []);
 
-  // ユーザー情報フェッチ (画像復元 & スタイル復元 & 決済反映)
   useEffect(() => {
     if (user?.email) {
       const fetchUser = () => {
@@ -418,7 +415,6 @@ function App() {
 
       fetchUser();
 
-      // ★決済完了直後なら能動的に確認APIを叩く
       const params = new URLSearchParams(window.location.search);
       if (params.get('payment') === 'success') {
         window.history.replaceState({}, '', '/');
@@ -848,23 +844,25 @@ function App() {
       <div style={styles.card}>
         <div style={{textAlign: 'left', marginBottom: '25px', padding: '0 10px'}}>
           <div style={{display:'flex', justifyContent:'space-between', borderBottom:'1px solid #eee', paddingBottom:'10px', marginBottom:'10px'}}>
-            <span style={{fontWeight:'bold', color:'#666'}}>{t.sub_free_title}</span>
-            <span>{t.sub_free_limit}</span>
+            <span style={{fontWeight:'bold', color:'#666'}}>{t.plan_free}</span>
+            <span>{t.plan_free_limit}</span>
           </div>
           <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-            <span style={{fontWeight:'bold', color:'#333'}}>{t.sub_pro_title}</span>
-            <span style={{fontWeight:'bold', color:'#00C2FF'}}>{t.sub_pro_limit}</span>
+            <span style={{fontWeight:'bold', color:'#333'}}>{t.plan_pro}</span>
+            <span style={{fontWeight:'bold', color:'#00C2FF'}}>{t.plan_pro_limit}</span>
           </div>
           <div style={{fontSize: '0.8rem', color: '#999', marginTop: '5px', textAlign:'right'}}>
-            {t.sub_pro_note}
+            {t.plan_pro_note}
           </div>
         </div>
 
         <button onClick={handlePortal} style={styles.settingsBtn}>
-          {t.sub_portal_btn}
+          {t.portal_btn}
         </button>
         
-        <p style={{fontSize:'0.8rem', color:'#999', marginTop:'15px'}} dangerouslySetInnerHTML={{__html: t.sub_portal_desc}} />
+        <p style={{fontSize:'0.8rem', color:'#999', marginTop:'15px'}}>
+          {t.portal_desc}
+        </p>
       </div>
       <button onClick={() => setCurrentView('chat')} style={styles.backBtn}>Back</button>
     </div>
@@ -974,7 +972,7 @@ function App() {
 
                  {!user.is_pro && (
                    <button onClick={() => { setShowLimitModal(true); setShowMenu(false); }} style={styles.menuUpgradeBtn}>
-                     {t.menu_upgrade}
+                     👑 Upgrade to Pro
                    </button>
                  )}
 
