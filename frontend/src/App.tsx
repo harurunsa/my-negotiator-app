@@ -829,22 +829,14 @@ function App() {
           </div>
         </div>
 
-        {/* 以前の「現在のステータス」表示は削除しました */}
-
-        {user?.is_pro ? (
-          <button onClick={handlePortal} style={styles.settingsBtn}>
-            契約内容の確認・変更 (Portal)
-          </button>
-        ) : (
-          <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
-            <button onClick={() => handleUpgrade('yearly')} style={styles.settingsBtn}>
-              Proにアップグレード (年額)
-            </button>
-            <button onClick={() => handleUpgrade('monthly')} style={{...styles.settingsBtn, background:'transparent', color:'#333', border:'1px solid #ddd'}}>
-              月額プランにする
-            </button>
-          </div>
-        )}
+        {/* 以前の分岐を削除し、常にポータルボタンを表示 */}
+        <button onClick={handlePortal} style={styles.settingsBtn}>
+          サブスクリプション管理 (Portal)
+        </button>
+        
+        <p style={{fontSize:'0.8rem', color:'#999', marginTop:'15px'}}>
+          ※プランの変更・解約・カード情報の更新は、<br/>Stripe管理画面(Portal)にて安全に行われます。
+        </p>
       </div>
       <button onClick={() => setCurrentView('chat')} style={styles.backBtn}>Back</button>
     </div>
