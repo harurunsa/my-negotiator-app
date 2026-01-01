@@ -570,34 +570,42 @@ app.post('/api/checkout', async (c) => {
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// ★ Stripe Portal (エラー処理付き)
+// ★ Stripe Portal (フリーユーザーもアクセス可能に改良)
 app.post('/api/portal', async (c) => {
   try {
     const { email } = await c.req.json();
     const stripe = new Stripe(c.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
 
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
-    if (!user || !user.stripe_customer_id) return c.json({ error: "No billing information found" }, 404);
+    let customerId = user?.stripe_customer_id;
+
+    // フリーユーザー（IDなし）なら新規作成
+    if (!customerId) {
+        const newCus = await stripe.customers.create({ email });
+        customerId = newCus.id;
+        await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(customerId, email).run();
+    }
 
     try {
       const session = await stripe.billingPortal.sessions.create({
-        customer: user.stripe_customer_id,
+        customer: customerId,
         return_url: `${c.env.FRONTEND_URL}/`,
       });
-      if (session.url) return c.json({ url: session.url });
+      return c.json({ url: session.url });
     } catch (err: any) {
-      // 顧客IDが無効ならIDをリセットしてエラーを返す
+      // ID無効時の自動修復
       if (err.code === 'resource_missing') {
-         await c.env.DB.prepare("UPDATE users SET stripe_customer_id = NULL WHERE email = ?").bind(email).run();
-         return c.json({ error: "Billing info reset. Please upgrade again." }, 400);
+         const newCus = await stripe.customers.create({ email });
+         await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(newCus.id, email).run();
+         // リトライはせずエラーを返す（次回成功）
+         return c.json({ error: "Setup complete. Please try again." }, 400); 
       }
       throw err;
     }
-    throw new Error("No URL");
   } catch (e: any) { return c.json({ error: e.message }, 500); }
 });
 
-// Webhook (Stripeのエラーログ回避のため一応残すが、処理は空でもOK)
+// Webhook
 app.post('/api/webhook', async (c) => {
   return c.text('Received', 200);
 });
