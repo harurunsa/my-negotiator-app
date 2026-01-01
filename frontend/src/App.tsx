@@ -4,7 +4,6 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
-// ★設定: フロント側でも上限を知っておく
 const MAX_CUSTOM_PERSONAS = 3;
 
 const TRANSLATIONS = {
@@ -371,23 +370,45 @@ function App() {
     }
   }, []);
 
-  // ユーザー情報フェッチ (画像復元 & スタイル復元)
+  // ユーザー情報フェッチ (画像復元 & スタイル復元 & 決済反映)
   useEffect(() => {
     if (user?.email) {
-      fetch(`${API_URL}/api/user?email=${user.email}`)
+      const fetchUser = () => {
+        fetch(`${API_URL}/api/user?email=${user.email}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.custom_personas) setCustomPersonas(data.custom_personas);
+            if (data.streak !== undefined) setUser(prev => prev ? { ...prev, streak: data.streak } : null);
+            if (data.is_pro !== undefined) setUser(prev => prev ? { ...prev, is_pro: data.is_pro } : null);
+            if (data.current_style) setStyle(data.current_style);
+          })
+          .catch(console.error);
+      };
+
+      fetchUser();
+
+      // ★決済完了直後なら確認
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('payment') === 'success') {
+        window.history.replaceState({}, '', '/');
+        
+        fetch(`${API_URL}/api/verify-subscription`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: user.email })
+        })
         .then(res => res.json())
         .then(data => {
-          if (data.custom_personas) {
-            setCustomPersonas(data.custom_personas);
-          }
-          if (data.streak !== undefined) setUser(prev => prev ? { ...prev, streak: data.streak } : null);
-          if (data.is_pro !== undefined) setUser(prev => prev ? { ...prev, is_pro: data.is_pro } : null);
-          
-          if (data.current_style) {
-            setStyle(data.current_style);
-          }
+            if (data.success && data.is_pro) {
+                setUser(prev => prev ? { ...prev, is_pro: 1 } : null);
+                alert("🎉 Upgrade Complete! (Pro Activated)");
+                triggerConfetti();
+            } else {
+                fetchUser();
+            }
         })
-        .catch(console.error);
+        .catch(() => fetchUser());
+      }
     }
   }, [user?.email]);
 
@@ -946,7 +967,6 @@ function App() {
                        </button>
                      </div>
                      
-                     {/* カスタム人格の管理リスト */}
                      {customPersonas.length > 0 && (
                        <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
                          {customPersonas.map(p => (
@@ -1134,13 +1154,6 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   backBtn: {
     background: 'transparent', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer'
-  },
-
-  upgradeHeaderBtn: {
-    padding: '6px 12px', fontSize: '0.8rem', borderRadius: '20px', border: 'none',
-    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333',
-    cursor: 'pointer', fontWeight: '800', boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
-    display: 'flex', alignItems: 'center', gap: '4px'
   },
 
   landingContainer: { 
