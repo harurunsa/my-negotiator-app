@@ -332,6 +332,7 @@ function App() {
 
   const [style, setStyle] = useState<StyleCode>('auto');
   
+  // ★ Menu Control
   const [showMenu, setShowMenu] = useState(false);
   
   const [customPersonas, setCustomPersonas] = useState<any[]>([]);
@@ -370,7 +371,7 @@ function App() {
     }
   }, []);
 
-  // ユーザー情報フェッチ (画像復元)
+  // ★ ユーザー情報フェッチ (画像復元 & スタイル復元)
   useEffect(() => {
     if (user?.email) {
       fetch(`${API_URL}/api/user?email=${user.email}`)
@@ -381,6 +382,11 @@ function App() {
           }
           if (data.streak !== undefined) setUser(prev => prev ? { ...prev, streak: data.streak } : null);
           if (data.is_pro !== undefined) setUser(prev => prev ? { ...prev, is_pro: data.is_pro } : null);
+          
+          // ★ スタイル復元
+          if (data.current_style) {
+            setStyle(data.current_style);
+          }
         })
         .catch(console.error);
     }
@@ -648,7 +654,7 @@ function App() {
           prev_context: lastAiMsg,
           current_goal: currentGoal,
           lang,
-          style
+          style // ★ スタイルIDを送信
         }),
       });
       const data = await res.json();
@@ -943,7 +949,6 @@ function App() {
                        </button>
                      </div>
                      
-                     {/* ★ カスタム人格の管理リスト */}
                      {customPersonas.length > 0 && (
                        <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
                          {customPersonas.map(p => (
