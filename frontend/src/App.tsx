@@ -370,7 +370,7 @@ function App() {
     }
   }, []);
 
-  // ユーザー情報フェッチ
+  // ユーザー情報フェッチ (画像復元 & スタイル復元 & 決済反映)
   useEffect(() => {
     if (user?.email) {
       const fetchUser = () => {
@@ -986,6 +986,7 @@ function App() {
                        </button>
                      </div>
                      
+                     {/* カスタム人格の管理リスト */}
                      {customPersonas.length > 0 && (
                        <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
                          {customPersonas.map(p => (
