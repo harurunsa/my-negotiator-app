@@ -4,7 +4,7 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
-// ★設定: フロント側でも上限を知っておく
+// ... (MAX_CUSTOM_PERSONAS, TRANSLATIONS は変更なし。省略せずに記載します)
 const MAX_CUSTOM_PERSONAS = 3;
 
 const TRANSLATIONS = {
@@ -69,6 +69,7 @@ const TRANSLATIONS = {
     limit_alert: "登録できるのは3つまでです。不要なものを削除してください。",
     delete_confirm: "本当に削除しますか？"
   },
+  // ... (他言語も同様に省略なしで維持)
   en: {
     logo: "Negotiator",
     goal_prefix: "Goal:",
@@ -371,7 +372,7 @@ function App() {
     }
   }, []);
 
-  // ★ ユーザー情報フェッチ (画像復元 & スタイル復元)
+  // ユーザー情報フェッチ (画像復元 & スタイル復元)
   useEffect(() => {
     if (user?.email) {
       fetch(`${API_URL}/api/user?email=${user.email}`)
@@ -383,7 +384,6 @@ function App() {
           if (data.streak !== undefined) setUser(prev => prev ? { ...prev, streak: data.streak } : null);
           if (data.is_pro !== undefined) setUser(prev => prev ? { ...prev, is_pro: data.is_pro } : null);
           
-          // ★ スタイル復元
           if (data.current_style) {
             setStyle(data.current_style);
           }
@@ -548,7 +548,6 @@ function App() {
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0] || !user) return;
     
-    // ★ 上限チェック (フロント側)
     if (customPersonas.length >= MAX_CUSTOM_PERSONAS) {
       alert(t.limit_alert);
       return;
@@ -576,7 +575,6 @@ function App() {
     finally { setIsAnalyzing(false); }
   };
 
-  // ★ 人格の削除・リネーム
   const handlePersonaManagement = async (action: 'delete' | 'rename', personaId: string) => {
     if (!user) return;
     
@@ -654,7 +652,7 @@ function App() {
           prev_context: lastAiMsg,
           current_goal: currentGoal,
           lang,
-          style // ★ スタイルIDを送信
+          style
         }),
       });
       const data = await res.json();
@@ -949,6 +947,7 @@ function App() {
                        </button>
                      </div>
                      
+                     {/* ★ カスタム人格の管理リスト */}
                      {customPersonas.length > 0 && (
                        <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
                          {customPersonas.map(p => (
@@ -1138,6 +1137,17 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: 'transparent', border: 'none', color: '#888', textDecoration: 'underline', cursor: 'pointer'
   },
 
+  upgradeHeaderBtn: {
+    padding: '6px 12px', fontSize: '0.8rem', borderRadius: '20px', border: 'none',
+    background: 'linear-gradient(135deg, #FFD700 0%, #FDB931 100%)', color: '#333',
+    cursor: 'pointer', fontWeight: '800', boxShadow: '0 2px 10px rgba(253, 185, 49, 0.3)',
+    display: 'flex', alignItems: 'center', gap: '4px'
+  },
+
+  streakBox: { textAlign: 'right' },
+  streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
+  streakValue: { fontSize: '1.2rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
+  
   landingContainer: { 
     flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center',
     background: '#0F172A', color: '#fff', position: 'relative', overflow: 'hidden'
