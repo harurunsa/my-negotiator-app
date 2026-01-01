@@ -331,7 +331,7 @@ function App() {
 
   const [style, setStyle] = useState<StyleCode>('auto');
   
-  // ★ Menu Control
+  // Menu Control
   const [showMenu, setShowMenu] = useState(false);
   
   const [customPersonas, setCustomPersonas] = useState<any[]>([]);
@@ -370,7 +370,7 @@ function App() {
     }
   }, []);
 
-  // ユーザー情報フェッチ (画像復元 & スタイル復元 & 決済反映)
+  // ユーザー情報フェッチ
   useEffect(() => {
     if (user?.email) {
       const fetchUser = () => {
@@ -829,12 +829,7 @@ function App() {
           </div>
         </div>
 
-        <div style={{background: '#f5f7fa', padding: '15px', borderRadius: '12px', marginBottom: '20px'}}>
-          <div style={{fontSize: '0.9rem', color: '#666', marginBottom: '5px'}}>現在のステータス</div>
-          <div style={{fontSize: '1.4rem', fontWeight: 'bold'}}>
-            {user?.is_pro ? <span style={{color:'#4CAF50'}}>Pro Plan (Active)</span> : <span>Free Plan</span>}
-          </div>
-        </div>
+        {/* 以前の「現在のステータス」表示は削除しました */}
 
         {user?.is_pro ? (
           <button onClick={handlePortal} style={styles.settingsBtn}>
