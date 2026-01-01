@@ -4,7 +4,7 @@ import confetti from 'https://esm.sh/canvas-confetti';
 
 const API_URL = "https://my-negotiator-app.yamashitahiro0628.workers.dev";
 
-// ... (MAX_CUSTOM_PERSONAS, TRANSLATIONS は変更なし。省略せずに記載します)
+// ★設定: フロント側でも上限を知っておく
 const MAX_CUSTOM_PERSONAS = 3;
 
 const TRANSLATIONS = {
@@ -69,7 +69,6 @@ const TRANSLATIONS = {
     limit_alert: "登録できるのは3つまでです。不要なものを削除してください。",
     delete_confirm: "本当に削除しますか？"
   },
-  // ... (他言語も同様に省略なしで維持)
   en: {
     logo: "Negotiator",
     goal_prefix: "Goal:",
@@ -652,7 +651,7 @@ function App() {
           prev_context: lastAiMsg,
           current_goal: currentGoal,
           lang,
-          style
+          style 
         }),
       });
       const data = await res.json();
@@ -947,7 +946,7 @@ function App() {
                        </button>
                      </div>
                      
-                     {/* ★ カスタム人格の管理リスト */}
+                     {/* カスタム人格の管理リスト */}
                      {customPersonas.length > 0 && (
                        <div style={{marginTop:'5px', borderTop:'1px solid #eee', paddingTop:'5px'}}>
                          {customPersonas.map(p => (
@@ -1144,10 +1143,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex', alignItems: 'center', gap: '4px'
   },
 
-  streakBox: { textAlign: 'right' },
-  streakLabel: { fontSize: '0.6rem', color: '#999', display: 'block', letterSpacing: '1px', fontWeight: '700' },
-  streakValue: { fontSize: '1.2rem', fontWeight: '900', color: '#1a1a1a', lineHeight: 1, letterSpacing: '-1px' },
-  
   landingContainer: { 
     flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center',
     background: '#0F172A', color: '#fff', position: 'relative', overflow: 'hidden'
