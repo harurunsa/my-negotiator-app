@@ -1,16 +1,17 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import Stripe from 'stripe'
 
 type Bindings = {
   GOOGLE_CLIENT_ID: string
   GOOGLE_CLIENT_SECRET: string
   DB: D1Database
   GEMINI_API_KEY: string
-  LEMON_SQUEEZY_API_KEY: string
-  LEMON_SQUEEZY_STORE_ID: string
-  LEMON_SQUEEZY_VARIANT_ID_YEARLY: string
-  LEMON_SQUEEZY_VARIANT_ID_MONTHLY: string
-  LEMON_SQUEEZY_WEBHOOK_SECRET: string
+  // ★ Stripe用の環境変数に変更
+  STRIPE_SECRET_KEY: string
+  STRIPE_WEBHOOK_SECRET: string
+  STRIPE_PRICE_ID_YEARLY: string
+  STRIPE_PRICE_ID_MONTHLY: string
   FRONTEND_URL: string
 }
 
@@ -23,7 +24,6 @@ const app = new Hono<{ Bindings: Bindings }>()
 
 const MAX_CUSTOM_PERSONAS = 3; 
 
-// CORS制限
 app.use('/*', async (c, next) => {
   const corsMiddleware = cors({
     origin: c.env.FRONTEND_URL || '*',
@@ -39,19 +39,15 @@ app.use('/*', async (c, next) => {
 const DAILY_LIMIT = 5;
 const MAX_CONTEXT_CHARS = 2500;
 
-// --- PPP設定 ---
-const PPP_DISCOUNTS: { [key: string]: string } = {
-  'IN': 'PPP50', 'BR': 'PPP50', 'ID': 'PPP50', 'PH': 'PPP50', 
-  'VN': 'PPP50', 'EG': 'PPP50', 'NG': 'PPP50', 'BD': 'PPP50', 'PK': 'PPP50',
-  'CN': 'PPP30', 'MX': 'PPP30', 'TH': 'PPP30', 'TR': 'PPP30', 
-  'MY': 'PPP30', 'RU': 'PPP30', 'AR': 'PPP30',
-};
+// PPP割引などはStripe Couponで対応可能ですが、今回は簡易化のため除外するか、
+// StripeのCheckout Session作成時に `discounts` パラメータで渡すロジックに変更が必要です。
+// いったんシンプルな実装にします。
 
 const COUNTRY_TO_LANG: { [key: string]: string } = {
   'JP': 'ja', 'BR': 'pt', 'PT': 'pt', 'ES': 'es', 'MX': 'es', 'ID': 'id', 'US': 'en'
 };
 
-// 人格（アーキタイプ）定義
+// 人格定義
 const ARCHETYPES: any = {
   empathy: {
     label: "The Empathic Counselor",
@@ -85,7 +81,7 @@ const MESSAGES: any = {
   id: { limit_reached: "Batas tercapai." }
 };
 
-// --- Helper Functions ---
+// Helper Functions
 function extractJson(text: string): string {
   let cleaned = text.replace(/```json\s*|\s*```/g, '');
   const start = cleaned.indexOf('{');
@@ -100,23 +96,7 @@ function truncateContext(text: string): string {
   return "..." + text.substring(text.length - MAX_CONTEXT_CHARS);
 }
 
-async function callLemonSqueezy(path: string, method: string, apiKey: string, body?: any) {
-  const res = await fetch(`https://api.lemonsqueezy.com/v1/${path}`, {
-    method,
-    headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/vnd.api+json', 'Content-Type': 'application/vnd.api+json' },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch (e) { throw new Error(`Lemon Squeezy Non-JSON: ${text.substring(0, 100)}`); }
-  if (!res.ok || data.errors) {
-    const errorDetail = data.errors ? data.errors.map((e: any) => `${e.title}: ${e.detail}`).join(', ') : "Unknown API Error";
-    throw new Error(`Lemon Squeezy Failed: ${errorDetail}`);
-  }
-  return data;
-}
-
-// --- Auth Routes ---
+// Auth Routes (変更なし)
 app.get('/auth/login', (c) => {
   const clientId = c.env.GOOGLE_CLIENT_ID
   const callbackUrl = `${new URL(c.req.url).origin}/auth/callback`
@@ -247,16 +227,7 @@ app.post('/api/analyze-persona', async (c) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          role: "user",
-          parts: [
-            { text: systemInstruction },
-            { inline_data: { mime_type: "image/jpeg", data: cleanBase64 } }
-          ]
-        }],
-        generationConfig: { response_mime_type: "application/json" }
-      })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstruction }, { inline_data: { mime_type: "image/jpeg", data: cleanBase64 } }] }], generationConfig: { response_mime_type: "application/json" } })
     });
 
     const data: any = await response.json();
@@ -282,7 +253,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// ★ AI Chat (スタイル保存機能追加)
+// AI Chat (物理アクション強制 & 口調維持 & スタイル保存)
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -294,7 +265,6 @@ app.post('/api/chat', async (c) => {
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
-    // ★追加: 選択されたスタイルをDBに保存
     if (style) {
       await c.env.DB.prepare("UPDATE users SET current_style = ? WHERE email = ?").bind(style, email).run();
     }
@@ -307,7 +277,6 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- 人格決定ロジック ---
     let archetypeLabel = "Empathic Counselor";
     let archetypePrompt = ARCHETYPES['empathy'].prompt;
     let selectedKey = style;
@@ -325,26 +294,11 @@ app.post('/api/chat', async (c) => {
             }
         }
     } else {
-        const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
-        const epsilon = 0.2; 
-        let bestKey: ArchetypeKey = 'empathy';
-        let bestRate = -1;
-        Object.keys(ARCHETYPES).forEach((key) => {
-            const k = key as ArchetypeKey;
-            const stat = styleStats[k] || { wins: 0, total: 0 };
-            const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
-            if (rate > bestRate) { bestRate = rate; bestKey = k; }
-        });
-        if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
-            const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
-            selectedKey = keys[Math.floor(Math.random() * keys.length)];
-        } else { selectedKey = bestKey; }
-        
+        selectedKey = 'empathy'; 
         archetypeLabel = ARCHETYPES[selectedKey].label;
         archetypePrompt = ARCHETYPES[selectedKey].prompt;
     }
 
-    // --- タスク処理とプロンプト構築 ---
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
@@ -381,10 +335,8 @@ app.post('/api/chat', async (c) => {
             `;
         }
     } 
-    
     else if (action === 'retry') {
         const currentTask = currentTaskList[taskIndex] || "Current Task";
-        const remainingTasks = currentTaskList.slice(taskIndex + 1);
         
         instructionBlock = `
           [STATE]: User is stuck on "${currentTask}".
@@ -394,7 +346,6 @@ app.post('/api/chat', async (c) => {
           [OUTPUT]: JSON with "new_task_list" and "reply".
         `;
     } 
-    
     else { 
         const currentTaskText = currentTaskList[taskIndex] || "None";
         const progressInfo = currentTaskList.length > 0 ? `(Step ${taskIndex + 1} of ${currentTaskList.length}: "${currentTaskText}")` : "(No plan yet)";
@@ -441,12 +392,10 @@ app.post('/api/chat', async (c) => {
       }
     `;
 
-    const requestText = `User: ${message || (action === 'next' ? "I finished the task." : "Help")}`;
-    
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent + "\n\n" + requestText }] }], generationConfig: { response_mime_type: "application/json" } })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent }] }], generationConfig: { response_mime_type: "application/json" } })
     });
 
     const data: any = await response.json();
@@ -515,80 +464,95 @@ app.post('/api/share-recovery', async (c) => {
   } catch(e: any) { return c.json({ error: "DB Error", details: e.message }, 500); }
 });
 
+// ★ Stripe Checkout (Stripe SDK使用)
 app.post('/api/checkout', async (c) => {
   try {
     const { email, plan } = await c.req.json();
-    if (!c.env.LEMON_SQUEEZY_STORE_ID) throw new Error("Missing Store ID");
+    const stripe = new Stripe(c.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
     
-    let variantId = plan === 'monthly' ? c.env.LEMON_SQUEEZY_VARIANT_ID_MONTHLY : c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
-    if (!variantId && !plan) variantId = c.env.LEMON_SQUEEZY_VARIANT_ID_YEARLY;
-    
-    const country = c.req.header('cf-ipcountry');
-    let discountCode = undefined;
-    if (country && PPP_DISCOUNTS[country]) discountCode = PPP_DISCOUNTS[country];
+    // DBからStripe Customer IDを取得
+    const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
+    let customerId = user?.stripe_customer_id;
 
-    const payload: any = {
-      data: {
-        type: "checkouts",
-        attributes: {
-          checkout_data: { email, custom: { user_email: email }, ...(discountCode ? { discount_code: discountCode } : {}) },
-          product_options: { redirect_url: `${c.env.FRONTEND_URL}/?payment=success` }
-        },
-        relationships: {
-          store: { data: { type: "stores", id: c.env.LEMON_SQUEEZY_STORE_ID.toString() } },
-          variant: { data: { type: "variants", id: variantId.toString() } }
-        }
-      }
-    };
-    const data: any = await callLemonSqueezy('checkouts', 'POST', c.env.LEMON_SQUEEZY_API_KEY, payload);
-    if (data?.data?.attributes?.url) return c.json({ url: data.data.attributes.url });
-    else throw new Error("No URL returned");
+    // もしなければ作成
+    if (!customerId) {
+      const customer = await stripe.customers.create({ email });
+      customerId = customer.id;
+      await c.env.DB.prepare("UPDATE users SET stripe_customer_id = ? WHERE email = ?").bind(customerId, email).run();
+    }
+
+    const priceId = plan === 'monthly' ? c.env.STRIPE_PRICE_ID_MONTHLY : c.env.STRIPE_PRICE_ID_YEARLY;
+
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      payment_method_types: ['card'],
+      line_items: [{ price: priceId, quantity: 1 }],
+      mode: 'subscription',
+      success_url: `${c.env.FRONTEND_URL}/?payment=success`,
+      cancel_url: `${c.env.FRONTEND_URL}/?payment=cancelled`,
+    });
+
+    if (session.url) return c.json({ url: session.url });
+    else throw new Error("No URL returned from Stripe");
+
   } catch(e: any) { return c.json({ error: e.message }, 500); }
 });
 
+// ★ Stripe Portal
 app.post('/api/portal', async (c) => {
   try {
     const { email } = await c.req.json();
+    const stripe = new Stripe(c.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
+
     const user: any = await c.env.DB.prepare("SELECT stripe_customer_id FROM users WHERE email = ?").bind(email).first();
     if (!user || !user.stripe_customer_id) return c.json({ error: "No billing information found" }, 404);
-    const data: any = await callLemonSqueezy(`customers/${user.stripe_customer_id}`, 'GET', c.env.LEMON_SQUEEZY_API_KEY);
-    const portalUrl = data?.data?.attributes?.urls?.customer_portal;
-    if (portalUrl) return c.json({ url: portalUrl });
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: user.stripe_customer_id,
+      return_url: `${c.env.FRONTEND_URL}/`,
+    });
+
+    if (session.url) return c.json({ url: session.url });
     else throw new Error("Portal URL not found");
   } catch (e: any) { return c.json({ error: e.message }, 500); }
 });
 
+// ★ Stripe Webhook
 app.post('/api/webhook', async (c) => {
-  const secret = c.env.LEMON_SQUEEZY_WEBHOOK_SECRET;
-  const signature = c.req.header('x-signature');
-  const bodyText = await c.req.text();
-  if (!signature) return c.text('No signature', 400);
-  
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sigBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(bodyText));
-  const hashArray = Array.from(new Uint8Array(sigBuffer));
-  const hexSignature = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  if (hexSignature !== signature) return c.text('Invalid signature', 400);
+  const sig = c.req.header('stripe-signature');
+  const body = await c.req.text();
+  const stripe = new Stripe(c.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' });
 
-  const body = JSON.parse(bodyText);
-  const eventName = body.meta.event_name;
-  const customData = body.meta.custom_data || {};
-  const attributes = body.data.attributes;
+  let event;
+  try {
+    if (!sig) throw new Error("No signature");
+    event = await stripe.webhooks.constructEventAsync(body, sig, c.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err: any) {
+    return c.text(`Webhook Error: ${err.message}`, 400);
+  }
 
   try {
-    if (eventName === 'subscription_created' || eventName === 'subscription_updated') {
-      const email = attributes.user_email || customData.user_email;
-      const customerId = attributes.customer_id; 
-      const status = attributes.status;
-      const isPro = (status === 'active' || status === 'on_trial') ? 1 : 0;
-      if (email) await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE email = ?").bind(isPro, customerId, email).run();
+    // 契約作成・更新・削除のハンドリング
+    if (event.type === 'checkout.session.completed' || event.type === 'customer.subscription.updated') {
+      const session = event.data.object as any;
+      const customerId = session.customer;
+      // customerIdからユーザーを探して is_pro = 1 にする
+      if (customerId) {
+         // status check (active, trialing)
+         const isActive = (session.status === 'active' || session.status === 'trialing');
+         await c.env.DB.prepare("UPDATE users SET is_pro = ?, stripe_customer_id = ? WHERE stripe_customer_id = ? OR email = ?")
+           .bind(isActive ? 1 : 0, customerId, customerId, session.customer_email || "").run();
+      }
     }
-    if (eventName === 'subscription_cancelled' || eventName === 'subscription_expired') {
-       const email = attributes.user_email || customData.user_email;
-       if (email) await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE email = ?").bind(email).run();
+    if (event.type === 'customer.subscription.deleted') {
+      const session = event.data.object as any;
+      const customerId = session.customer;
+      if (customerId) {
+        await c.env.DB.prepare("UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?").bind(customerId).run();
+      }
     }
   } catch (e) { return c.text('DB Update Failed', 500); }
+
   return c.text('Received', 200);
 });
 
