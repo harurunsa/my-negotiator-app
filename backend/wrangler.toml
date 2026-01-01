@@ -14,4 +14,4 @@ database_id = "40fb3ddd-bbed-4c95-8139-66d26bb5d49c"
 # Stripeダッシュボードで作成したPrice ID (price_...) を設定してください
 STRIPE_PRICE_ID_YEARLY = "price_1Ro1SWIrUlY19KORHTEZi07o"  # 年額プラン
 STRIPE_PRICE_ID_MONTHLY = "price_1SjDPdIrpTPay9KgjUkWu3yA" # 月額プラン
-#FRONTEND_URL = "https://my-negotiator-app.pages.dev"
+FRONTEND_URL = "https://my-negotiator-app.pages.dev"
