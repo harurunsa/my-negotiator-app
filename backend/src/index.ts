@@ -37,7 +37,7 @@ app.use('/*', async (c, next) => {
 });
 
 const DAILY_LIMIT = 5;
-const MAX_CONTEXT_CHARS = 2500; // コンテキストをさらに拡張
+const MAX_CONTEXT_CHARS = 2500;
 
 // --- PPP設定 ---
 const PPP_DISCOUNTS: { [key: string]: string } = {
@@ -282,7 +282,7 @@ app.post('/api/analyze-persona', async (c) => {
   }
 });
 
-// ★ AI Chat (修正版: 物理アクション強制 & 口調維持)
+// ★ AI Chat (スタイル保存機能追加)
 app.post('/api/chat', async (c) => {
   try {
     const { message, email, action, prev_context, current_goal, lang = 'en', style = 'auto' } = await c.req.json()
@@ -294,6 +294,11 @@ app.post('/api/chat', async (c) => {
     const user: any = await c.env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
     if (!user) return c.json({ error: "User not found" }, 401);
 
+    // ★追加: 選択されたスタイルをDBに保存
+    if (style) {
+      await c.env.DB.prepare("UPDATE users SET current_style = ? WHERE email = ?").bind(style, email).run();
+    }
+
     if (!user.is_pro && user.usage_count >= DAILY_LIMIT) {
       return c.json({ limit_reached: true, reply: t.limit_reached });
     }
@@ -302,7 +307,7 @@ app.post('/api/chat', async (c) => {
       await c.env.DB.prepare("UPDATE users SET usage_count = usage_count + 1 WHERE email = ?").bind(email).run();
     }
 
-    // --- 人格決定 ---
+    // --- 人格決定ロジック ---
     let archetypeLabel = "Empathic Counselor";
     let archetypePrompt = ARCHETYPES['empathy'].prompt;
     let selectedKey = style;
@@ -320,13 +325,26 @@ app.post('/api/chat', async (c) => {
             }
         }
     } else {
-        // Auto: 簡易ロジック
-        selectedKey = 'empathy'; 
+        const styleStats = user.style_stats ? JSON.parse(user.style_stats) : {};
+        const epsilon = 0.2; 
+        let bestKey: ArchetypeKey = 'empathy';
+        let bestRate = -1;
+        Object.keys(ARCHETYPES).forEach((key) => {
+            const k = key as ArchetypeKey;
+            const stat = styleStats[k] || { wins: 0, total: 0 };
+            const rate = stat.total === 0 ? 0.5 : stat.wins / stat.total;
+            if (rate > bestRate) { bestRate = rate; bestKey = k; }
+        });
+        if (Math.random() < epsilon || Object.keys(styleStats).length === 0) {
+            const keys = Object.keys(ARCHETYPES) as ArchetypeKey[];
+            selectedKey = keys[Math.floor(Math.random() * keys.length)];
+        } else { selectedKey = bestKey; }
+        
         archetypeLabel = ARCHETYPES[selectedKey].label;
         archetypePrompt = ARCHETYPES[selectedKey].prompt;
     }
 
-    // --- タスクコンテキスト ---
+    // --- タスク処理とプロンプト構築 ---
     let currentTaskList: string[] = [];
     try { currentTaskList = JSON.parse(user.task_list || '[]'); } catch(e) {}
     let taskIndex = user.current_task_index || 0;
@@ -336,29 +354,25 @@ app.post('/api/chat', async (c) => {
     
     let instructionBlock = "";
     
-    // アクション別のプロンプト構成
     if (action === 'next') {
         let nextIndex = taskIndex + 1;
         if (nextIndex < currentTaskList.length) {
-            const completedTask = currentTaskList[taskIndex];
             const nextTask = currentTaskList[nextIndex];
+            const completedTask = currentTaskList[taskIndex];
             
-            // DB更新
             const updatedMemory = truncateContext((user.memory || "") + ` [Log]: User finished "${completedTask}".`);
             await c.env.DB.prepare("UPDATE users SET current_task_index = ?, memory = ? WHERE email = ?").bind(nextIndex, updatedMemory, email).run();
             
-            // 次の指示
             instructionBlock = `
               [STATE]: User completed task "${completedTask}".
               [NEXT TASK]: "${nextTask}" (${nextIndex + 1}/${currentTaskList.length}).
               [INSTRUCTION]: 
               1. In [CURRENT PERSONA] tone, praise the user briefly.
-              2. Clearly tell them the [NEXT TASK].
+              2. Explicitly state the [NEXT TASK].
               3. Encourage them to do it now.
               [OUTPUT]: JSON "reply" only.
             `;
         } else {
-            // 完了
             await c.env.DB.prepare("UPDATE users SET task_list = '[]', current_task_index = 0 WHERE email = ?").bind(email).run();
             instructionBlock = `
               [STATE]: All tasks completed!
@@ -377,25 +391,23 @@ app.post('/api/chat', async (c) => {
           [INSTRUCTION]: Break down "${currentTask}" into 2-3 tiny, PHYSICAL ACTIONS.
           [BANNED VERBS]: Think, Decide, Check, Look, Prepare.
           [REQUIRED VERBS]: Stand up, Touch, Hold, Open, Throw.
-          [EXAMPLE]: "Clean desk" -> 1. "Stand up." 2. "Pick up one pen." 3. "Put pen in drawer."
           [OUTPUT]: JSON with "new_task_list" and "reply".
         `;
     } 
     
-    else { // normal
-        // 現在のタスク情報
+    else { 
         const currentTaskText = currentTaskList[taskIndex] || "None";
         const progressInfo = currentTaskList.length > 0 ? `(Step ${taskIndex + 1} of ${currentTaskList.length}: "${currentTaskText}")` : "(No plan yet)";
 
         instructionBlock = `
           [STATE]: User input: "${message}". Current Plan: ${progressInfo}.
           [INSTRUCTION]:
-          1. IF the user wants to start a goal (e.g. "clean room", "study"):
+          1. IF user wants to start a goal (e.g. "clean room", "study"):
              - Create a "new_task_list" with 3-5 steps.
-             - **CRITICAL**: Steps MUST be PHYSICAL ACTIONS (e.g. "Get trash bag"), NOT mental ones (e.g. "Check mess").
+             - **CRITICAL**: Steps MUST be PHYSICAL ACTIONS (e.g. "Get trash bag", "Pick up bottles"), NOT mental ones.
           2. IF just chatting:
-             - Reply in [CURRENT PERSONA] tone. No task list.
-          3. IF user reports progress on current task:
+             - Reply in [CURRENT PERSONA] tone.
+          3. IF user reports progress:
              - Praise and guide to next step.
           [OUTPUT]: JSON. If new plan, include "new_task_list". Always include "reply".
         `;
@@ -415,24 +427,26 @@ app.post('/api/chat', async (c) => {
       ${instructionBlock}
       
       [ABSOLUTE RULES]:
-      1. Stay in character (Persona) at all times.
-      2. When creating tasks, use **PHYSICAL VERBS** (Stand, Pick up, Open). Avoid cognitive verbs (Think, Plan).
-      3. Keep responses concise and encouraging.
+      1. **ALWAYS** speak in the [CURRENT PERSONA] tone. Never break character.
+      2. **ACTION BIAS**: Use PHYSICAL VERBS (Stand, Pick up). Avoid cognitive verbs (Think).
+      3. Keep responses concise.
 
       [OUTPUT FORMAT]: JSON ONLY
       {
-        "reply": "Your conversational response here.",
-        "new_task_list": ["Step 1", "Step 2"] (Optional),
+        "reply": "Conversational response in Persona Tone",
+        "new_task_list": ["Action 1", "Action 2"] (Optional),
         "timer_seconds": 180,
-        "detected_goal": "Goal name (e.g. Clean Room)",
+        "detected_goal": "Goal String",
         "used_archetype": "${selectedKey}"
       }
     `;
 
+    const requestText = `User: ${message || (action === 'next' ? "I finished the task." : "Help")}`;
+    
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent }] }], generationConfig: { response_mime_type: "application/json" } })
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: systemInstructionContent + "\n\n" + requestText }] }], generationConfig: { response_mime_type: "application/json" } })
     });
 
     const data: any = await response.json();
@@ -441,16 +455,14 @@ app.post('/api/chat', async (c) => {
     let result;
     try { result = JSON.parse(extractJson(rawText)); } catch (e) {
       console.error("JSON Parse Error:", rawText);
-      result = { reply: lang === 'ja' ? "エラーです。もう一度試して。" : "Error.", timer_seconds: 60, used_archetype: selectedKey };
+      result = { reply: lang === 'ja' ? "準備はいい？次へ行こう！" : "Ready? Let's go!", timer_seconds: 60, used_archetype: selectedKey };
     }
     
-    // ★ フェイルセーフ: 空白回答防止
     if (!result.reply || result.reply.trim() === "") {
         result.reply = lang === 'ja' ? "準備はいい？次へ行こう！" : "Ready? Let's go!";
     }
     if (!result.used_archetype) result.used_archetype = selectedKey;
 
-    // タスク更新処理
     if (result.new_task_list && Array.isArray(result.new_task_list) && result.new_task_list.length > 0) {
       let finalTaskList: string[] = [];
       if (action === 'retry') {
@@ -476,7 +488,6 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// (Feedback, Share, Checkout, Portal, Webhook は変更なし)
 app.post('/api/feedback', async (c) => {
   const { email, used_archetype, is_success } = await c.req.json();
   try {
